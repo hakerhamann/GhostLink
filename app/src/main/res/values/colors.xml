@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="icon_bg">#03040A</color>
+    <color name="ghost_bg">#020503</color>
+    <color name="ghost_panel">#08110B</color>
+    <color name="ghost_panel_alt">#0D1B11</color>
+    <color name="ghost_neon">#89FF3A</color>
+    <color name="ghost_neon_soft">#63CC43</color>
+    <color name="ghost_text_primary">#E7F2E5</color>
+    <color name="ghost_text_secondary">#93A994</color>
+</resources>

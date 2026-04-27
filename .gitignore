@@ -1,0 +1,35 @@
+# IDE and OS
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Gradle and Android build outputs
+.gradle/
+.gradle-wrapper-tmp/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+**/build/
+
+# Mobile artifacts and crash dumps
+*.apk
+*.aab
+*.ap_
+*.hprof
+hs_err_pid*
+
+# Local machine and secrets
+local.properties
+app/google-services.json
+*.keystore
+*.jks
+keystore/
+backend/fcm-service-account.json
+
+# Python backend local artifacts
+backend/.venv/
+backend/reserv.db
+**/__pycache__/
+**/*.pyc

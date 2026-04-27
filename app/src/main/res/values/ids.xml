@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="tag_video_url" type="id" />
+    <item name="tag_video_job" type="id" />
+    <item name="tag_video_player" type="id" />
+    <item name="tag_video_surface" type="id" />
+</resources>

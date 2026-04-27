@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remembered_accounts_hint">Сохранённые профили</string>
+    <string name="quick_login_missing">Сохранённый профиль не найден</string>
+    <string name="quick_login_expired">Быстрый вход истёк. Войдите по логину и паролю.</string>
+
+    <string name="chat_action_pin">Закрепить</string>
+    <string name="chat_action_unpin">Открепить</string>
+    <string name="chat_action_delete">Удалить</string>
+    <string name="chat_delete_confirm">Удалить чат из вашего списка?</string>
+    <string name="chat_deleted_local">Чат удалён из списка</string>
+
+    <string name="reply_message">Ответить</string>
+    <string name="delete_for_me">Удалить у себя</string>
+    <string name="delete_for_everyone">Удалить у всех</string>
+    <string name="message_deleted_for_me">Сообщение удалено у вас</string>
+    <string name="replying_to">Ответ: %1$s</string>
+
+    <string name="chat_fallback_title">Чат</string>
+</resources>
