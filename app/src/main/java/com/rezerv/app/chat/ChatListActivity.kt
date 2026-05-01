@@ -29,6 +29,7 @@ import com.rezerv.app.AppContainer
 import com.rezerv.app.R
 import com.rezerv.app.auth.LoginActivity
 import com.rezerv.app.data.model.ChatPreview
+import com.rezerv.app.data.model.GroupInfo
 import com.rezerv.app.data.model.UpdateDownloadState
 import com.rezerv.app.data.model.UserProfile
 import com.rezerv.app.data.repository.RealtimeSubscription
@@ -92,8 +93,7 @@ class ChatListActivity : AppCompatActivity() {
         adapter = ChatListAdapter(
             onClick = ::openChat,
             onLongClick = ::showChatActionsMenu,
-            onAvatarClick = ::openChatAvatarPreview,
-            onNameClick = ::openChatProfileFromName,
+            onAvatarClick = ::openChatDetailsFromAvatar,
             isPinned = { chat -> pinnedChatIds.contains(chat.id) }
         )
         binding.recyclerChats.layoutManager = LinearLayoutManager(this)
@@ -709,15 +709,9 @@ class ChatListActivity : AppCompatActivity() {
         overridePendingTransition(R.anim.chat_slide_in_right, R.anim.chat_stay)
     }
 
-    private fun openChatAvatarPreview(chat: ChatPreview) {
-        val displayName = chat.peerDisplayName?.ifBlank { chat.title }
-            ?: chat.title
-        startActivity(AvatarPreviewActivity.newIntent(this, displayName, chat.avatarUrl))
-    }
-
-    private fun openChatProfileFromName(chat: ChatPreview) {
+    private fun openChatDetailsFromAvatar(chat: ChatPreview) {
         if (chat.isGroup) {
-            openChat(chat)
+            showGroupInfoFromList(chat)
             return
         }
 
@@ -731,6 +725,69 @@ class ChatListActivity : AppCompatActivity() {
                 avatarUrl = chat.avatarUrl
             )
         )
+    }
+
+    private fun showGroupInfoFromList(chat: ChatPreview) {
+        lifecycleScope.launch {
+            binding.progress.isVisible = true
+            val result = runCatching {
+                AppContainer.chatRepository.getGroupInfo(chat.id)
+            }
+            binding.progress.isVisible = false
+
+            result.onSuccess { info ->
+                showGroupInfoDialog(info)
+            }.onFailure { throwable ->
+                Toast.makeText(
+                    this@ChatListActivity,
+                    throwable.message ?: getString(R.string.messages_load_error),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    private fun showGroupInfoDialog(info: GroupInfo) {
+        val view = layoutInflater.inflate(R.layout.dialog_group_info, null)
+
+        val ivAvatar = view.findViewById<android.widget.ImageView>(R.id.ivGroupInfoAvatar)
+        val tvAvatarFallback = view.findViewById<android.widget.TextView>(R.id.tvGroupInfoAvatarFallback)
+        val tvTitle = view.findViewById<android.widget.TextView>(R.id.tvGroupInfoTitle)
+        val tvDescription = view.findViewById<android.widget.TextView>(R.id.tvGroupInfoDescription)
+        val tvMembers = view.findViewById<android.widget.TextView>(R.id.tvGroupInfoMembers)
+
+        AvatarLoader.bind(
+            imageView = ivAvatar,
+            fallbackView = tvAvatarFallback,
+            displayName = info.title,
+            avatarUrl = info.avatarUrl
+        )
+        ivAvatar.setOnClickListener {
+            startActivity(AvatarPreviewActivity.newIntent(this, info.title, info.avatarUrl))
+        }
+        tvAvatarFallback.setOnClickListener {
+            startActivity(AvatarPreviewActivity.newIntent(this, info.title, info.avatarUrl))
+        }
+        tvTitle.text = info.title
+        tvDescription.text = info.description.ifBlank { getString(R.string.group_info_description_empty) }
+        tvMembers.text = if (info.members.isEmpty()) {
+            getString(R.string.group_info_members_empty)
+        } else {
+            info.members.joinToString(separator = "\n") { member ->
+                val creatorSuffix = if (!info.createdByUid.isNullOrBlank() && info.createdByUid == member.uid) {
+                    " [создатель]"
+                } else {
+                    ""
+                }
+                "\u2022 ${member.displayName} (@${member.login})$creatorSuffix"
+            }
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.group_info_title))
+            .setView(view)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
     }
 
     private fun openLogin() {

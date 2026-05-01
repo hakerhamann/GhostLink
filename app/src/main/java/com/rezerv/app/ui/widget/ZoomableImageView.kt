@@ -87,11 +87,11 @@ class ZoomableImageView @JvmOverloads constructor(
                 hadMultiTouch = false
                 isDismissDragging = false
                 resetDismissTransform(animated = false)
-                parent?.requestDisallowInterceptTouchEvent(true)
             }
 
             MotionEvent.ACTION_POINTER_DOWN -> {
                 hadMultiTouch = true
+                parent?.requestDisallowInterceptTouchEvent(true)
                 if (isDismissDragging) {
                     resetDismissTransform(animated = true)
                     isDismissDragging = false
@@ -109,24 +109,26 @@ class ZoomableImageView @JvmOverloads constructor(
                 val totalDy = event.rawY - downRawY
 
                 if (isDismissDragging) {
-                    applyDismissDrag(totalDy.coerceAtMost(0f))
+                    applyDismissDrag(totalDy)
                     lastTouchX = x
                     lastTouchY = y
                     return true
                 }
 
                 if (normalizedScale > MIN_SCALE + SCALE_EPS) {
+                    parent?.requestDisallowInterceptTouchEvent(true)
                     drawMatrix.postTranslate(dx, dy)
                     fixTranslation()
                     imageMatrix = drawMatrix
                 } else if (!scaleDetector.isInProgress && !hadMultiTouch) {
-                    val canStartDismiss = totalDy < -touchSlop &&
+                    val canStartDismiss = abs(totalDy) > touchSlop &&
                         abs(totalDy) > abs(totalDx) * SWIPE_DIRECTION_RATIO
 
                     if (canStartDismiss) {
                         animate().cancel()
                         isDismissDragging = true
-                        applyDismissDrag(totalDy.coerceAtMost(0f))
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                        applyDismissDrag(totalDy)
                     }
                 }
                 lastTouchX = x
@@ -151,7 +153,7 @@ class ZoomableImageView @JvmOverloads constructor(
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (isDismissDragging) {
                     val shouldDismiss = event.actionMasked == MotionEvent.ACTION_UP &&
-                        -dismissDragOffsetY >= dismissDistancePx()
+                        abs(dismissDragOffsetY) >= dismissDistancePx()
                     if (shouldDismiss) {
                         animateDismissAndNotify()
                     } else {
@@ -164,7 +166,7 @@ class ZoomableImageView @JvmOverloads constructor(
                 ) {
                     val deltaY = event.rawY - downRawY
                     val deltaX = event.rawX - downRawX
-                    if (deltaY < -dismissDistancePx() &&
+                    if (abs(deltaY) >= dismissDistancePx() &&
                         abs(deltaY) > abs(deltaX) * SWIPE_DIRECTION_RATIO
                     ) {
                         animateDismissAndNotify()
@@ -187,7 +189,7 @@ class ZoomableImageView @JvmOverloads constructor(
         scaleX = 1f
         scaleY = 1f
         alpha = 1f
-        val progress = (-offsetY / dismissDistancePx()).coerceIn(0f, 1f)
+        val progress = (abs(offsetY) / dismissDistancePx()).coerceIn(0f, 1f)
         onDismissDragProgress?.invoke(progress)
     }
 
@@ -261,7 +263,8 @@ class ZoomableImageView @JvmOverloads constructor(
     private fun animateDismissAndNotify() {
         if (isAnimatingDismiss) return
         isAnimatingDismiss = true
-        val targetTranslationY = -max(height.toFloat(), dismissDistancePx() * 1.6f)
+        val direction = if (dismissDragOffsetY >= 0f) 1f else -1f
+        val targetTranslationY = direction * max(height.toFloat(), dismissDistancePx() * 1.6f)
         animate().cancel()
         animate()
             .translationY(targetTranslationY)

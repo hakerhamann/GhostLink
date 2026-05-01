@@ -22,8 +22,14 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.GridLayout
+import android.widget.ImageView
 import android.widget.PopupMenu
+import android.widget.LinearLayout
 import android.widget.Toast
+import android.widget.TextView
 import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -65,12 +71,14 @@ import com.rezerv.app.data.repository.RealtimeSubscription
 import com.rezerv.app.databinding.ActivityChatBinding
 import com.rezerv.app.notifications.ActiveChatTracker
 import com.rezerv.app.notifications.MessageNotificationHelper
+import com.rezerv.app.chat.PhotoPreviewActivity
 import com.rezerv.app.profile.AvatarPreviewActivity
 import com.rezerv.app.profile.UserProfileActivity
 import com.rezerv.app.ui.adapters.EmojiAdapter
 import com.rezerv.app.ui.adapters.MessageAdapter
 import com.rezerv.app.util.AvatarLoader
 import com.rezerv.app.util.AvatarProcessor
+import com.rezerv.app.util.ImageThumbnailLoader
 import com.rezerv.app.util.PhotoMessageProcessor
 import com.rezerv.app.storage.SessionStore
 import kotlinx.coroutines.launch
@@ -200,15 +208,24 @@ class ChatActivity : AppCompatActivity() {
     private var swipeBackArmed: Boolean = false
     private var swipeBackHandled: Boolean = false
     private var swipeBackDragging: Boolean = false
+    private val selectedPhotoUris = mutableListOf<Uri>()
+    private val removedEditedPhotoUrls = mutableSetOf<String>()
+    private val pendingEditedMessages = mutableMapOf<String, PendingEditedMessage>()
+    private var pendingPhotoSelectionTarget: PhotoSelectionTarget = PhotoSelectionTarget.COMPOSE
+    private var inlineEditState: InlineEditState? = null
 
     private val pickGroupAvatar = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) uploadGroupAvatar(uri)
     }
 
-    private val pickMessagePhoto = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) {
-            uploadAndSendPhoto(uri)
+    private val pickMessagePhotos = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        if (uris.isNotEmpty()) {
+            when (pendingPhotoSelectionTarget) {
+                PhotoSelectionTarget.COMPOSE -> addPhotoDrafts(uris)
+                PhotoSelectionTarget.EDIT -> applyEditedPhotoSelection(uris)
+            }
         }
+        pendingPhotoSelectionTarget = PhotoSelectionTarget.COMPOSE
     }
 
     private val recordAudioPermissionLauncher = registerForActivityResult(
@@ -285,9 +302,18 @@ class ChatActivity : AppCompatActivity() {
             }
             if (pendingEmojiShowTransition) {
                 if (!keyboardVisible) {
+                    val currentPanelHeight = (binding.emojiContainer.layoutParams?.height ?: 0).coerceAtLeast(0)
+                    val targetPanelHeight = resolveEmojiPanelHeightPx()
                     pendingEmojiShowTransition = false
                     composerInsetReservePx = 0
-                    applyEmojiPanelHeight()
+                    if (currentPanelHeight != targetPanelHeight) {
+                        animateEmojiPanelHeight(
+                            fromHeight = currentPanelHeight,
+                            toHeight = targetPanelHeight
+                        )
+                    } else {
+                        applyEmojiPanelHeight(targetPanelHeight)
+                    }
                     binding.emojiContainer.isVisible = true
                     cancelPendingEmojiOpenFallback()
                 } else if (composerInsetReservePx > 0) {
@@ -320,13 +346,16 @@ class ChatActivity : AppCompatActivity() {
             val smoothKeyboardOnly =
                 !pendingKeyboardShowTransition &&
                     !pendingEmojiShowTransition &&
-                    !binding.emojiContainer.isVisible &&
                     composerInsetReservePx == 0
             applyInputBarBottomInset(bottomInset, animate = smoothKeyboardOnly)
             insets
         }
 
         binding.tvChatTitle.text = chatTitle
+        bindChatHeaderAvatar(
+            displayName = chatPeerDisplayName.ifBlank { chatTitle },
+            avatarUrl = chatAvatarUrl.ifBlank { null }
+        )
         binding.tvChatTitle.setOnClickListener {
             if (!isGroupChat) {
                 openUserProfile(
@@ -337,6 +366,9 @@ class ChatActivity : AppCompatActivity() {
                 )
             }
         }
+        binding.chatAvatarContainer.setOnClickListener { openChatHeaderAvatarTarget() }
+        binding.ivChatAvatar.setOnClickListener { openChatHeaderAvatarTarget() }
+        binding.tvChatAvatarFallback.setOnClickListener { openChatHeaderAvatarTarget() }
         binding.btnBack.setOnClickListener { finishChatWithBackAnimation() }
         binding.btnChatMenu.setOnClickListener { anchor -> showChatMenu(anchor) }
         binding.btnSend.setOnClickListener { sendMessage() }
@@ -344,23 +376,39 @@ class ChatActivity : AppCompatActivity() {
         binding.btnAttach.setOnClickListener {
             if (isAnyRecordingInProgress()) {
                 Toast.makeText(this, "Завершите запись", Toast.LENGTH_SHORT).show()
+            } else if (isEditingTextMessage()) {
+                Toast.makeText(this, "Для текста доступно только редактирование подписи", Toast.LENGTH_SHORT).show()
             } else {
                 hideEmojiPanel(showKeyboard = false)
-                pickMessagePhoto.launch("image/*")
+                pendingPhotoSelectionTarget = if (isEditingPhotoMessage()) {
+                    PhotoSelectionTarget.EDIT
+                } else {
+                    PhotoSelectionTarget.COMPOSE
+                }
+                pickMessagePhotos.launch("image/*")
             }
         }
+        binding.btnClearPhotoDrafts.setOnClickListener { clearPhotoDrafts() }
         binding.btnVoice.setOnClickListener { toggleRecordMode() }
         binding.btnVoice.setOnTouchListener { view, event -> handleVoiceButtonTouch(view, event) }
         binding.btnSwitchVideoCamera.setOnClickListener { switchVideoCamera() }
         binding.btnGroupAvatar.isVisible = false
         binding.btnGroupAvatar.setOnClickListener(null)
         binding.btnCancelReply.setOnClickListener { clearReplyTarget() }
+        binding.btnCancelEdit.setOnClickListener { cancelInlineEdit() }
         updateRecordingUi(false, elapsedSec = 0)
         setupEmojiPanel()
         binding.etMessage.addTextChangedListener { updateComposerActionState() }
+        binding.etMessage.addTextChangedListener { updateInlineEditUi() }
+        updatePhotoDraftUi()
         updateComposerActionState()
+        updateInlineEditUi()
 
         onBackPressedDispatcher.addCallback(this) {
+            if (isEditingMessage()) {
+                cancelInlineEdit()
+                return@addCallback
+            }
             if (binding.emojiContainer.isVisible) {
                 hideEmojiPanel(showKeyboard = false)
             } else {
@@ -661,6 +709,7 @@ class ChatActivity : AppCompatActivity() {
                     latestMessages = messages
                     syncOverlayMessagesWithServer(messages)
                     pruneOverlayMessages(messages)
+                    pruneEditedMessages(messages)
                     submitVisibleMessages(mergeMessagesForDisplay(messages))
                 }
             },
@@ -719,52 +768,103 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun mergeMessagesForDisplay(serverMessages: List<ChatMessage> = latestMessages): List<ChatMessage> {
-        if (localOverlayMessages.isEmpty()) return serverMessages
-        val mappedServerIds = localToServerMessageIds.values
-            .asSequence()
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .toHashSet()
-        val filteredServerMessages = if (mappedServerIds.isEmpty()) {
+        val mergedBase = if (localOverlayMessages.isEmpty()) {
             serverMessages
         } else {
-            serverMessages.filterNot { it.id in mappedServerIds }
+            val mappedServerIds = localToServerMessageIds.values
+                .asSequence()
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .toHashSet()
+            val filteredServerMessages = if (mappedServerIds.isEmpty()) {
+                serverMessages
+            } else {
+                serverMessages.filterNot { it.id in mappedServerIds }
+            }
+            val serverIds = filteredServerMessages.mapTo(hashSetOf()) { it.id }
+            val overlay = localOverlayMessages
+                .asSequence()
+                .filter { it.id !in serverIds }
+                .sortedBy { it.timestamp }
+                .toList()
+            if (overlay.isEmpty()) {
+                filteredServerMessages
+            } else if (filteredServerMessages.isEmpty()) {
+                overlay
+            } else {
+                val merged = ArrayList<ChatMessage>(filteredServerMessages.size + overlay.size)
+                var serverIndex = 0
+                var overlayIndex = 0
+                while (serverIndex < filteredServerMessages.size && overlayIndex < overlay.size) {
+                    val serverMessage = filteredServerMessages[serverIndex]
+                    val overlayMessage = overlay[overlayIndex]
+                    val takeServerMessage = if (serverMessage.timestamp != overlayMessage.timestamp) {
+                        serverMessage.timestamp <= overlayMessage.timestamp
+                    } else {
+                        true
+                    }
+                    if (takeServerMessage) {
+                        merged += serverMessage
+                        serverIndex += 1
+                    } else {
+                        merged += overlayMessage
+                        overlayIndex += 1
+                    }
+                }
+                while (serverIndex < filteredServerMessages.size) {
+                    merged += filteredServerMessages[serverIndex++]
+                }
+                while (overlayIndex < overlay.size) {
+                    merged += overlay[overlayIndex++]
+                }
+                merged
+            }
         }
-        val serverIds = filteredServerMessages.mapTo(hashSetOf()) { it.id }
-        val overlay = localOverlayMessages
-            .asSequence()
-            .filter { it.id !in serverIds }
-            .sortedBy { it.timestamp }
-            .toList()
-        if (overlay.isEmpty()) return filteredServerMessages
-        if (filteredServerMessages.isEmpty()) return overlay
+        return applyPendingEditedMessages(mergedBase)
+    }
 
-        val merged = ArrayList<ChatMessage>(filteredServerMessages.size + overlay.size)
-        var serverIndex = 0
-        var overlayIndex = 0
-        while (serverIndex < filteredServerMessages.size && overlayIndex < overlay.size) {
-            val serverMessage = filteredServerMessages[serverIndex]
-            val overlayMessage = overlay[overlayIndex]
-            val takeServerMessage = if (serverMessage.timestamp != overlayMessage.timestamp) {
-                serverMessage.timestamp <= overlayMessage.timestamp
-            } else {
-                true
+    private fun applyPendingEditedMessages(messages: List<ChatMessage>): List<ChatMessage> {
+        if (pendingEditedMessages.isEmpty()) return messages
+        return messages.map { current ->
+            val pendingEntry = pendingEditedMessages.entries.firstOrNull { (_, pending) ->
+                current.id == pending.replacement.id || current.id == pending.serverMessageId
+            } ?: return@map current
+            pendingEntry.value.replacement.copy(id = current.id, sendState = current.sendState)
+        }
+    }
+
+    private fun pruneEditedMessages(serverMessages: List<ChatMessage>) {
+        if (pendingEditedMessages.isEmpty()) return
+        val serverById = serverMessages.associateBy { it.id }
+        val iterator = pendingEditedMessages.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            val pending = entry.value
+            val serverMessage = serverById[pending.serverMessageId] ?: serverById[pending.replacement.id] ?: continue
+            if (messagesMatchForEdit(serverMessage, pending.replacement)) {
+                iterator.remove()
             }
-            if (takeServerMessage) {
-                merged += serverMessage
-                serverIndex += 1
-            } else {
-                merged += overlayMessage
-                overlayIndex += 1
-            }
         }
-        while (serverIndex < filteredServerMessages.size) {
-            merged += filteredServerMessages[serverIndex++]
-        }
-        while (overlayIndex < overlay.size) {
-            merged += overlay[overlayIndex++]
-        }
-        return merged
+    }
+
+    private fun messagesMatchForEdit(first: ChatMessage, second: ChatMessage): Boolean {
+        return first.type == second.type &&
+            first.text == second.text &&
+            first.voiceUrl == second.voiceUrl &&
+            first.voiceDurationSec == second.voiceDurationSec &&
+            first.imageUrl == second.imageUrl &&
+            first.imageUrls == second.imageUrls &&
+            first.imageWidth == second.imageWidth &&
+            first.imageHeight == second.imageHeight &&
+            first.imageWidths == second.imageWidths &&
+            first.imageHeights == second.imageHeights &&
+            first.videoUrl == second.videoUrl &&
+            first.videoDurationSec == second.videoDurationSec &&
+            first.replyToMessageId == second.replyToMessageId &&
+            first.replyToSenderName == second.replyToSenderName &&
+            first.replyToText == second.replyToText &&
+            first.replyToImageUrl == second.replyToImageUrl &&
+            first.edited == second.edited
     }
 
     private fun pruneOverlayMessages(serverMessages: List<ChatMessage>) {
@@ -798,6 +898,12 @@ class ChatActivity : AppCompatActivity() {
     private fun appendOverlayMessage(message: ChatMessage) {
         localOverlayMessages += message
         submitVisibleMessages(mergeMessagesForDisplay())
+    }
+
+    private fun appendOutgoingOverlayMessage(message: ChatMessage) {
+        forceScrollToBottomOnNextUpdate = true
+        userManuallyScrolledAwayFromBottom = false
+        appendOverlayMessage(message)
     }
 
     private fun markOverlayMessageSent(localId: String, confirmedMessage: ChatMessage) {
@@ -872,6 +978,7 @@ class ChatActivity : AppCompatActivity() {
             replyToMessageId = sanitizeReplyMessageId(replyTarget),
             replyToSenderName = replyTarget?.senderName,
             replyToText = replyTarget?.let(::replyPreviewText),
+            replyToImageUrl = replyTarget?.let(::replyPreviewImageUrl),
             timestamp = timestampMs,
             deliveredBy = listOf(user.uid),
             readBy = listOf(user.uid),
@@ -909,15 +1016,29 @@ class ChatActivity : AppCompatActivity() {
 
     private fun buildOptimisticImageMessage(
         user: UserProfile,
+        imageUrls: List<String>,
+        imageWidths: List<Int> = emptyList(),
+        imageHeights: List<Int> = emptyList(),
+        caption: String,
         replyTarget: ChatMessage?
     ): ChatMessage {
         val message = buildOptimisticBaseMessage(
             user = user,
             type = MessageType.IMAGE,
-            text = PHOTO_PREVIEW_TEXT,
+            text = caption.ifBlank { PHOTO_PREVIEW_TEXT },
             replyTarget = replyTarget
         )
-        return message.copy(imageUrl = "pending://image/${message.id}")
+        val safeImageUrls = imageUrls.mapIndexed { index, value ->
+            value.ifBlank { "pending://image/${message.id}/$index" }
+        }
+        return message.copy(
+            imageUrl = safeImageUrls.firstOrNull() ?: "pending://image/${message.id}",
+            imageUrls = safeImageUrls,
+            imageWidth = imageWidths.firstOrNull()?.coerceAtLeast(0) ?: 0,
+            imageHeight = imageHeights.firstOrNull()?.coerceAtLeast(0) ?: 0,
+            imageWidths = imageWidths.map { it.coerceAtLeast(0) },
+            imageHeights = imageHeights.map { it.coerceAtLeast(0) }
+        )
     }
 
     private fun buildOptimisticVideoMessage(
@@ -1219,6 +1340,16 @@ class ChatActivity : AppCompatActivity() {
             return
         }
 
+        if (isEditingMessage()) {
+            saveInlineEditedMessage()
+            return
+        }
+
+        if (selectedPhotoUris.isNotEmpty()) {
+            sendPhotoDrafts(user)
+            return
+        }
+
         val rawText = binding.etMessage.text?.toString().orEmpty().trim()
         if (rawText.isBlank()) return
 
@@ -1228,10 +1359,9 @@ class ChatActivity : AppCompatActivity() {
             text = rawText,
             replyTarget = replyTarget
         )
-        appendOverlayMessage(optimisticMessage)
+        appendOutgoingOverlayMessage(optimisticMessage)
         binding.etMessage.text?.clear()
         clearReplyTarget()
-        forceScrollToBottomOnNextUpdate = true
 
         lifecycleScope.launch {
             binding.btnSend.isEnabled = false
@@ -1430,10 +1560,194 @@ class ChatActivity : AppCompatActivity() {
         return binding.etMessage.text?.toString()?.trim().orEmpty().isNotEmpty()
     }
 
+    private fun hasDraftPhotos(): Boolean {
+        return selectedPhotoUris.isNotEmpty()
+    }
+
+    private fun isEditingMessage(): Boolean {
+        return inlineEditState != null
+    }
+
+    private fun isEditingPhotoMessage(): Boolean {
+        return inlineEditState?.message?.type == MessageType.IMAGE
+    }
+
+    private fun isEditingTextMessage(): Boolean {
+        return inlineEditState?.message?.type == MessageType.TEXT
+    }
+
+    private fun updateInlineEditUi() {
+        val editState = inlineEditState
+        binding.editContainer.isVisible = editState != null && editState.message.type != MessageType.IMAGE
+        if (editState == null) {
+            binding.tvEditTitle.text = ""
+            binding.tvEditText.text = ""
+            binding.btnCancelEdit.isEnabled = false
+            return
+        }
+
+        binding.btnCancelEdit.isEnabled = true
+        binding.tvEditTitle.text = when (editState.message.type) {
+            MessageType.IMAGE -> "Редактирование фото"
+            MessageType.VOICE -> "Редактирование голосового"
+            MessageType.VIDEO -> "Редактирование видео"
+            MessageType.TEXT -> "Редактирование сообщения"
+        }
+        binding.tvEditText.text = when (editState.message.type) {
+            MessageType.IMAGE -> {
+                val caption = editState.message.text.replace('\n', ' ')
+                    .trim()
+                    .takeIf { it.isNotBlank() && it != PHOTO_PREVIEW_TEXT }
+                caption ?: "Фото: ${resolveMessagePhotoUrls(editState.message).size}"
+            }
+
+            MessageType.VOICE -> {
+                editState.message.text.replace('\n', ' ').trim().ifBlank { VOICE_PREVIEW_TEXT }
+            }
+
+            MessageType.VIDEO -> {
+                editState.message.text.replace('\n', ' ').trim().ifBlank { VIDEO_PREVIEW_TEXT }
+            }
+
+            MessageType.TEXT -> {
+                editState.message.text.replace('\n', ' ').trim().ifBlank { "Текст сообщения" }
+            }
+        }
+    }
+
     private fun updateComposerActionState() {
-        val showSend = hasDraftText() && !isAnyRecordingInProgress()
+        val showSend = (isEditingMessage() || hasDraftText() || hasDraftPhotos()) && !isAnyRecordingInProgress()
         binding.btnSend.isVisible = showSend
         binding.btnVoice.isVisible = !showSend
+        binding.btnAttach.isVisible = !isAnyRecordingInProgress() && (!isEditingMessage() || isEditingPhotoMessage())
+    }
+
+    private fun addPhotoDrafts(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val existingUris = selectedPhotoUris.mapTo(hashSetOf()) { it.toString() }
+        var added = 0
+        for (uri in uris) {
+            val editedExistingCount = if (isEditingPhotoMessage()) {
+                resolveMessagePhotoUrls(inlineEditState!!.message).count { it !in removedEditedPhotoUrls }
+            } else {
+                0
+            }
+            if (selectedPhotoUris.size + editedExistingCount >= MAX_PHOTO_DRAFTS) break
+            val key = uri.toString().trim()
+            if (key.isBlank() || key in existingUris) continue
+            selectedPhotoUris += uri
+            existingUris += key
+            added += 1
+        }
+        if (added == 0) return
+        val totalDrafts = if (isEditingPhotoMessage()) currentEditedPhotoSources().size else selectedPhotoUris.size
+        if (totalDrafts >= MAX_PHOTO_DRAFTS && uris.size > added) {
+            Toast.makeText(this, "Можно выбрать до 10 фото", Toast.LENGTH_SHORT).show()
+        }
+        updatePhotoDraftUi()
+        updateComposerActionState()
+    }
+
+    private fun clearPhotoDrafts() {
+        if (isEditingPhotoMessage()) {
+            cancelInlineEdit()
+            return
+        }
+        if (selectedPhotoUris.isEmpty()) return
+        selectedPhotoUris.clear()
+        updatePhotoDraftUi()
+        updateComposerActionState()
+    }
+
+    private fun updatePhotoDraftUi() {
+        val editState = inlineEditState
+        val previewItems = when {
+            editState?.message?.type == MessageType.IMAGE -> {
+                val existing = resolveMessagePhotoUrls(editState.message)
+                    .filterNot { it in removedEditedPhotoUrls }
+                    .map { PhotoDraftPreview(source = it, existingUrl = it, selectedUriIndex = null) }
+                val selected = selectedPhotoUris.mapIndexed { index, uri ->
+                    PhotoDraftPreview(source = uri.toString(), existingUrl = null, selectedUriIndex = index)
+                }
+                existing + selected
+            }
+            selectedPhotoUris.isNotEmpty() -> selectedPhotoUris.mapIndexed { index, uri ->
+                PhotoDraftPreview(source = uri.toString(), existingUrl = null, selectedUriIndex = index)
+            }
+            else -> emptyList()
+        }
+        val hasDrafts = previewItems.isNotEmpty() || editState?.message?.type == MessageType.IMAGE
+        binding.photoDraftContainer.isVisible = hasDrafts
+        binding.photoDraftStrip.removeAllViews()
+        if (!hasDrafts) return
+
+        binding.tvPhotoDraftCount.text = when {
+            editState?.message?.type == MessageType.IMAGE -> "Фото: ${previewItems.size}"
+            selectedPhotoUris.isNotEmpty() -> "Выбрано фото: ${selectedPhotoUris.size}"
+            else -> ""
+        }
+        binding.btnClearPhotoDrafts.isVisible = selectedPhotoUris.isNotEmpty() || editState?.message?.type == MessageType.IMAGE
+        previewItems.forEachIndexed { index, preview ->
+            val thumbnail = ImageView(this).apply {
+                layoutParams = FrameLayout.LayoutParams(dpToPx(56f), dpToPx(56f))
+                background = getDrawable(R.drawable.bg_message_image)
+                clipToOutline = true
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                contentDescription = "photo_draft"
+                bindPreviewPhoto(this, preview.source)
+            }
+            val removeButton = TextView(this).apply {
+                layoutParams = FrameLayout.LayoutParams(dpToPx(22f), dpToPx(22f)).apply {
+                    gravity = android.view.Gravity.TOP or android.view.Gravity.END
+                }
+                background = getDrawable(R.drawable.bg_video_play_button)
+                gravity = android.view.Gravity.CENTER
+                text = "\u2715"
+                setTextColor(Color.WHITE)
+                textSize = 11f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                contentDescription = "remove_photo_draft"
+                setOnClickListener { removePhotoDraftPreview(preview) }
+            }
+            val holder = FrameLayout(this).apply {
+                layoutParams = LinearLayout.LayoutParams(dpToPx(62f), dpToPx(62f)).apply {
+                    marginEnd = if (index == previewItems.lastIndex) 0 else dpToPx(4f)
+                }
+                addView(thumbnail)
+                addView(removeButton)
+            }
+            binding.photoDraftStrip.addView(holder)
+        }
+    }
+
+    private fun removePhotoDraftPreview(preview: PhotoDraftPreview) {
+        val selectedIndex = preview.selectedUriIndex
+        if (selectedIndex != null) {
+            if (selectedIndex in selectedPhotoUris.indices) {
+                selectedPhotoUris.removeAt(selectedIndex)
+            }
+        } else {
+            preview.existingUrl?.let { removedEditedPhotoUrls += it }
+        }
+        updatePhotoDraftUi()
+        updateComposerActionState()
+    }
+
+    private fun currentEditedPhotoSources(): List<String> {
+        val message = inlineEditState?.message ?: return emptyList()
+        if (message.type != MessageType.IMAGE) return emptyList()
+        return resolveMessagePhotoUrls(message)
+            .filterNot { it in removedEditedPhotoUrls } +
+            selectedPhotoUris.map(Uri::toString)
+    }
+
+    private fun bindPreviewPhoto(imageView: ImageView, source: String) {
+        val safeSource = source.trim()
+        if (safeSource.isBlank()) {
+            imageView.setImageDrawable(null)
+            return
+        }
+        ImageThumbnailLoader.bind(imageView, safeSource, dpToPx(112f))
     }
 
     private fun isEmojiPanelActiveOrPending(): Boolean {
@@ -2193,9 +2507,8 @@ class ChatActivity : AppCompatActivity() {
             durationSec = durationSec,
             replyTarget = replyTarget
         )
-        appendOverlayMessage(optimisticMessage)
+        appendOutgoingOverlayMessage(optimisticMessage)
         clearReplyTarget()
-        forceScrollToBottomOnNextUpdate = true
 
         lifecycleScope.launch {
             binding.btnVoice.isEnabled = false
@@ -2234,6 +2547,132 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
+    private fun saveInlineEditedMessage() {
+        val editState = inlineEditState ?: return
+        val message = editState.message
+        val newText = binding.etMessage.text?.toString().orEmpty().trim()
+        val replacementPhotoSources = if (message.type == MessageType.IMAGE) {
+            currentEditedPhotoSources().takeIf { sources ->
+                sources != resolveMessagePhotoUrls(message)
+            }
+        } else {
+            null
+        }
+        if (message.type == MessageType.IMAGE && currentEditedPhotoSources().isEmpty()) {
+            Toast.makeText(this, "Оставьте хотя бы одно фото", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (message.type == MessageType.TEXT && newText.isBlank()) {
+            Toast.makeText(this, getString(R.string.edit_message_error), Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        lifecycleScope.launch {
+            binding.btnSend.isEnabled = false
+            binding.btnAttach.isEnabled = false
+            runCatching {
+                editMessageWithOptimisticPreview(
+                    message = message,
+                    newText = newText,
+                    replacementPhotoSources = replacementPhotoSources
+                )
+            }.onSuccess {
+                finishInlineEdit()
+            }.onFailure { throwable ->
+                Toast.makeText(
+                    this@ChatActivity,
+                    throwable.message ?: getString(R.string.edit_message_error),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            binding.btnSend.isEnabled = true
+            binding.btnAttach.isEnabled = true
+        }
+    }
+
+    private fun sendPhotoDrafts(user: UserProfile) {
+        val replyTarget = replyTargetMessage
+        val draftUris = selectedPhotoUris.toList()
+        if (draftUris.isEmpty()) return
+
+        val rawCaption = binding.etMessage.text?.toString().orEmpty().trim()
+
+        lifecycleScope.launch {
+            val draftSizes = draftUris.map { uri ->
+                PhotoMessageProcessor.readDisplaySize(this@ChatActivity, uri)
+            }
+            val optimisticMessage = buildOptimisticImageMessage(
+                user = user,
+                imageUrls = draftUris.map(Uri::toString),
+                imageWidths = draftSizes.map { it?.width ?: 0 },
+                imageHeights = draftSizes.map { it?.height ?: 0 },
+                caption = rawCaption,
+                replyTarget = replyTarget
+            )
+            appendOutgoingOverlayMessage(optimisticMessage)
+            clearReplyTarget()
+            clearPhotoDrafts()
+            binding.etMessage.text?.clear()
+
+            val preparedPhotos = runCatching {
+                draftUris.map { uri ->
+                    PhotoMessageProcessor.prepareForUpload(this@ChatActivity, uri).let { prepared ->
+                        PhotoDraftUpload(
+                            bytes = prepared.bytes,
+                            width = prepared.width,
+                            height = prepared.height,
+                            fileName = prepared.fileName
+                        )
+                    }
+                }
+            }.getOrElse { throwable ->
+                markOverlayMessageFailed(optimisticMessage.id)
+                Toast.makeText(
+                    this@ChatActivity,
+                    throwable.message ?: getString(R.string.send_message_error),
+                    Toast.LENGTH_SHORT
+                ).show()
+                return@launch
+            }
+
+            val uploadResult = runCatching {
+                val uploadedUrls = ArrayList<String>(preparedPhotos.size)
+                for (photo in preparedPhotos) {
+                    val photoUrl = AppContainer.chatRepository.uploadPhoto(
+                        chatId = chatId,
+                        imageBytes = photo.bytes,
+                        fileName = photo.fileName
+                    )
+                    uploadedUrls += photoUrl
+                }
+                val firstPhoto = preparedPhotos.first()
+                AppContainer.chatRepository.sendPhotoMessage(
+                    chatId = chatId,
+                    photoUrls = uploadedUrls,
+                    width = firstPhoto.width,
+                    height = firstPhoto.height,
+                    widths = preparedPhotos.map { it.width },
+                    heights = preparedPhotos.map { it.height },
+                    caption = rawCaption,
+                    fallbackText = PHOTO_PREVIEW_TEXT,
+                    replyToMessageId = sanitizeReplyMessageId(replyTarget)
+                )
+            }
+
+            uploadResult.onSuccess { confirmedMessage ->
+                markOverlayMessageSent(optimisticMessage.id, confirmedMessage)
+                MessageNotificationHelper.cancelChatNotification(this@ChatActivity, chatId)
+            }.onFailure { throwable ->
+                markOverlayMessageFailed(optimisticMessage.id)
+                Toast.makeText(
+                    this@ChatActivity,
+                    throwable.message ?: getString(R.string.send_message_error),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
     private fun uploadAndSendVideo(file: File, durationSec: Int) {
         val user = currentUser ?: run {
             runCatching { file.delete() }
@@ -2245,9 +2684,8 @@ class ChatActivity : AppCompatActivity() {
             durationSec = durationSec,
             replyTarget = replyTarget
         )
-        appendOverlayMessage(optimisticMessage)
+        appendOutgoingOverlayMessage(optimisticMessage)
         clearReplyTarget()
-        forceScrollToBottomOnNextUpdate = true
 
         lifecycleScope.launch {
             binding.btnVoice.isEnabled = false
@@ -2289,20 +2727,17 @@ class ChatActivity : AppCompatActivity() {
     private fun uploadAndSendPhoto(uri: Uri) {
         val user = currentUser ?: return
         val replyTarget = replyTargetMessage
+        val rawCaption = binding.etMessage.text?.toString().orEmpty().trim()
         val optimisticMessage = buildOptimisticImageMessage(
             user = user,
+            imageUrls = listOf(uri.toString()),
+            caption = rawCaption,
             replyTarget = replyTarget
         )
-        appendOverlayMessage(optimisticMessage)
+        appendOutgoingOverlayMessage(optimisticMessage)
         clearReplyTarget()
-        forceScrollToBottomOnNextUpdate = true
 
         lifecycleScope.launch {
-            binding.progress.isVisible = true
-            binding.btnAttach.isEnabled = false
-            binding.btnVoice.isEnabled = false
-            binding.btnSend.isEnabled = false
-
             runCatching {
                 val prepared = PhotoMessageProcessor.prepareForUpload(this@ChatActivity, uri)
                 val photoUrl = AppContainer.chatRepository.uploadPhoto(
@@ -2312,9 +2747,12 @@ class ChatActivity : AppCompatActivity() {
                 )
                 AppContainer.chatRepository.sendPhotoMessage(
                     chatId = chatId,
-                    photoUrl = photoUrl,
+                    photoUrls = listOf(photoUrl),
                     width = prepared.width,
                     height = prepared.height,
+                    widths = listOf(prepared.width),
+                    heights = listOf(prepared.height),
+                    caption = rawCaption,
                     fallbackText = PHOTO_PREVIEW_TEXT,
                     replyToMessageId = sanitizeReplyMessageId(replyTarget)
                 )
@@ -2329,11 +2767,6 @@ class ChatActivity : AppCompatActivity() {
                     Toast.LENGTH_SHORT
                 ).show()
             }
-
-            binding.progress.isVisible = false
-            binding.btnAttach.isEnabled = true
-            binding.btnVoice.isEnabled = true
-            binding.btnSend.isEnabled = true
         }
     }
 
@@ -2392,7 +2825,7 @@ class ChatActivity : AppCompatActivity() {
             Toast.makeText(this, "Сообщение еще отправляется", Toast.LENGTH_SHORT).show()
             return
         }
-        if (message.type != MessageType.TEXT) {
+        if (message.type != MessageType.TEXT && message.type != MessageType.IMAGE) {
             showDeleteOwnMessageDialog(message)
             return
         }
@@ -2554,10 +2987,14 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun setReplyTarget(message: ChatMessage) {
+        if (isEditingMessage()) {
+            cancelInlineEdit()
+        }
         replyTargetMessage = message
         binding.replyContainer.isVisible = true
         binding.tvReplyTitle.text = getString(R.string.replying_to, message.senderName)
         binding.tvReplyText.text = replyPreviewText(message)
+        bindReplyTargetImage(replyPreviewImageUrl(message))
         if (!isEmojiPanelActiveOrPending()) {
             binding.etMessage.requestFocus()
             showKeyboard()
@@ -2569,6 +3006,7 @@ class ChatActivity : AppCompatActivity() {
         binding.replyContainer.isVisible = false
         binding.tvReplyTitle.text = ""
         binding.tvReplyText.text = ""
+        clearReplyTargetImage()
     }
 
     private fun onReplyPreviewTap(message: ChatMessage) {
@@ -2603,10 +3041,47 @@ class ChatActivity : AppCompatActivity() {
     private fun replyPreviewText(message: ChatMessage): String {
         return when (message.type) {
             MessageType.VOICE -> VOICE_PREVIEW_TEXT
-            MessageType.IMAGE -> PHOTO_PREVIEW_TEXT
+            MessageType.IMAGE -> message.text.normalizeReplyPreviewText()
+                .takeIf { it.isNotBlank() && it != PHOTO_PREVIEW_TEXT }
+                ?: PHOTO_PREVIEW_TEXT
             MessageType.VIDEO -> VIDEO_PREVIEW_TEXT
-            MessageType.TEXT -> message.text.replace('\n', ' ').ifBlank { "..." }
+            MessageType.TEXT -> message.text.normalizeReplyPreviewText().ifBlank { "..." }
         }
+    }
+
+    private fun String.normalizeReplyPreviewText(): String {
+        return replace("\r\n", "\n")
+            .replace('\r', '\n')
+            .trim()
+    }
+
+    private fun replyPreviewImageUrl(message: ChatMessage): String? {
+        if (message.type != MessageType.IMAGE) return null
+        return resolveMessagePhotoUrls(message).firstOrNull()
+    }
+
+    private fun bindReplyTargetImage(imageUrl: String?) {
+        val safeUrl = imageUrl?.trim().orEmpty()
+        if (safeUrl.isBlank()) {
+            clearReplyTargetImage()
+            binding.tvReplyText.isVisible = true
+            return
+        }
+        binding.tvReplyText.isVisible = shouldShowReplyTargetText()
+        binding.ivReplyImage.isVisible = true
+        ImageThumbnailLoader.bind(binding.ivReplyImage, safeUrl, dpToPx(84f))
+    }
+
+    private fun clearReplyTargetImage() {
+        binding.ivReplyImage.isVisible = false
+        binding.ivReplyImage.tag = null
+        binding.ivReplyImage.setImageDrawable(null)
+        binding.tvReplyText.isVisible = true
+    }
+
+    private fun shouldShowReplyTargetText(): Boolean {
+        val text = binding.tvReplyText.text?.toString()?.trim().orEmpty()
+        return text.isNotBlank() && text != PHOTO_PREVIEW_TEXT
     }
     private fun showChatMenu(anchor: View) {
         val popup = PopupMenu(this, anchor)
@@ -2986,45 +3461,185 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun showEditMessageDialog(message: ChatMessage) {
-        val input = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            setText(message.text)
-            setSelection(message.text.length)
-            setTextColor(Color.parseColor("#E7F2E5"))
-            setHintTextColor(Color.parseColor("#93A994"))
-            setBackgroundColor(Color.parseColor("#0C1910"))
-            setPadding(30, 24, 30, 24)
+        beginInlineMessageEdit(message)
+    }
+
+    private fun beginInlineMessageEdit(message: ChatMessage) {
+        val serverMessageId = resolveServerMessageId(message.id).orEmpty().ifBlank { message.id }
+        inlineEditState = InlineEditState(
+            message = message,
+            serverMessageId = serverMessageId
+        )
+        clearReplyTarget()
+        selectedPhotoUris.clear()
+        removedEditedPhotoUrls.clear()
+        if (binding.emojiContainer.isVisible) {
+            hideEmojiPanel(showKeyboard = true)
         }
 
-        MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.edit_message))
-            .setView(input)
-            .setNegativeButton(getString(R.string.cancel), null)
-            .setPositiveButton(getString(R.string.save)) { _, _ ->
-                val newText = input.text?.toString().orEmpty().trim()
-                if (newText.isBlank()) return@setPositiveButton
-                lifecycleScope.launch {
-                    val serverMessageId = resolveServerMessageId(message.id)
-                    if (serverMessageId == null) {
-                        Toast.makeText(
-                            this@ChatActivity,
-                            "Сообщение еще не синхронизировано",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                        return@launch
-                    }
-                    runCatching {
-                        AppContainer.chatRepository.editMessage(chatId, serverMessageId, newText)
-                    }.onFailure { throwable ->
-                        Toast.makeText(
-                            this@ChatActivity,
-                            throwable.message ?: getString(R.string.edit_message_error),
-                            Toast.LENGTH_SHORT
-                        ).show()
+        binding.etMessage.setText(
+            message.text.takeIf {
+                it.isNotBlank() && !(message.type == MessageType.IMAGE && it.trim() == PHOTO_PREVIEW_TEXT)
+            }.orEmpty()
+        )
+        binding.etMessage.setSelection(binding.etMessage.text?.length ?: 0)
+        updateInlineEditUi()
+        updatePhotoDraftUi()
+        updateComposerActionState()
+        binding.etMessage.requestFocus()
+        showKeyboard()
+    }
+
+    private fun cancelInlineEdit() {
+        if (!isEditingMessage()) return
+        inlineEditState = null
+        selectedPhotoUris.clear()
+        removedEditedPhotoUrls.clear()
+        pendingPhotoSelectionTarget = PhotoSelectionTarget.COMPOSE
+        binding.etMessage.text?.clear()
+        updateInlineEditUi()
+        updatePhotoDraftUi()
+        updateComposerActionState()
+    }
+
+    private fun finishInlineEdit() {
+        inlineEditState = null
+        selectedPhotoUris.clear()
+        removedEditedPhotoUrls.clear()
+        pendingPhotoSelectionTarget = PhotoSelectionTarget.COMPOSE
+        binding.etMessage.text?.clear()
+        updateInlineEditUi()
+        updatePhotoDraftUi()
+        updateComposerActionState()
+    }
+
+    private fun applyEditedPhotoSelection(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        addPhotoDrafts(uris)
+        updatePhotoDraftUi()
+        updateComposerActionState()
+    }
+
+    private suspend fun editMessageWithOptimisticPreview(
+        message: ChatMessage,
+        newText: String,
+        replacementPhotoSources: List<String>? = null
+    ) {
+        val serverMessageId = resolveServerMessageId(message.id)?.trim().orEmpty()
+        if (serverMessageId.isBlank()) {
+            throw IllegalStateException("Сообщение еще не синхронизировано")
+        }
+
+        val normalizedText = newText.trim()
+        if (message.type == MessageType.TEXT && normalizedText.isBlank()) {
+            throw IllegalArgumentException("Текст сообщения не может быть пустым")
+        }
+
+        val optimisticMessage = buildOptimisticEditedMessage(
+            message = message,
+            newText = normalizedText,
+            replacementPhotoSources = replacementPhotoSources
+        )
+        pendingEditedMessages[message.id] = PendingEditedMessage(
+            serverMessageId = serverMessageId,
+            replacement = optimisticMessage
+        )
+        submitVisibleMessages(mergeMessagesForDisplay())
+
+        try {
+            val confirmedMessage = if (message.type == MessageType.IMAGE && !replacementPhotoSources.isNullOrEmpty()) {
+                val editedPhotos = replacementPhotoSources.map { source ->
+                    val uri = runCatching { Uri.parse(source) }.getOrNull()
+                    if (uri != null && (uri.scheme == "content" || uri.scheme == "file")) {
+                        PhotoMessageProcessor.prepareForUpload(this@ChatActivity, uri).let { prepared ->
+                            PreparedEditedPhoto(
+                                url = null,
+                                upload = PhotoDraftUpload(
+                                    bytes = prepared.bytes,
+                                    width = prepared.width,
+                                    height = prepared.height,
+                                    fileName = prepared.fileName
+                                )
+                            )
+                        }
+                    } else {
+                        PreparedEditedPhoto(url = source, upload = null)
                     }
                 }
+                val photoUrls = ArrayList<String>(editedPhotos.size)
+                val widths = ArrayList<Int>(editedPhotos.size)
+                val heights = ArrayList<Int>(editedPhotos.size)
+                for (photo in editedPhotos) {
+                    val upload = photo.upload
+                    if (upload != null) {
+                        val photoUrl = AppContainer.chatRepository.uploadPhoto(
+                            chatId = chatId,
+                            imageBytes = upload.bytes,
+                            fileName = upload.fileName
+                        )
+                        photoUrls += photoUrl
+                        widths += upload.width
+                        heights += upload.height
+                    } else {
+                        photoUrls += photo.url.orEmpty()
+                        widths += 0
+                        heights += 0
+                    }
+                }
+                AppContainer.chatRepository.editMessage(
+                    chatId = chatId,
+                    messageId = serverMessageId,
+                    text = normalizedText,
+                    imageUrls = photoUrls,
+                    imageWidths = widths,
+                    imageHeights = heights
+                )
+            } else {
+                AppContainer.chatRepository.editMessage(
+                    chatId = chatId,
+                    messageId = serverMessageId,
+                    text = normalizedText
+                )
             }
-            .show()
+
+            pendingEditedMessages[message.id] = PendingEditedMessage(
+                serverMessageId = serverMessageId,
+                replacement = confirmedMessage.copy(id = message.id)
+            )
+            submitVisibleMessages(mergeMessagesForDisplay())
+        } catch (throwable: Throwable) {
+            pendingEditedMessages.remove(message.id)
+            submitVisibleMessages(mergeMessagesForDisplay())
+            throw throwable
+        }
+    }
+
+    private fun buildOptimisticEditedMessage(
+        message: ChatMessage,
+        newText: String,
+        replacementPhotoSources: List<String>?
+    ): ChatMessage {
+        return when (message.type) {
+            MessageType.IMAGE -> {
+                val photoUrls = replacementPhotoSources
+                    ?.map { it.trim() }
+                    ?.filter { it.isNotBlank() }
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: resolveMessagePhotoUrls(message)
+                message.copy(
+                    text = newText,
+                    imageUrl = photoUrls.firstOrNull(),
+                    imageUrls = photoUrls,
+                    imageWidths = message.imageWidths,
+                    imageHeights = message.imageHeights,
+                    edited = message.edited
+                )
+            }
+            else -> message.copy(
+                text = newText,
+                edited = message.edited
+            )
+        }
     }
 
     private fun refreshGroupInfoSilently() {
@@ -3037,10 +3652,37 @@ class ChatActivity : AppCompatActivity() {
 
     private fun applyGroupInfo(info: GroupInfo) {
         cachedGroupInfo = info
+        binding.tvChatTitle.text = info.title.ifBlank { chatTitle }
+        bindChatHeaderAvatar(
+            displayName = info.title.ifBlank { chatTitle },
+            avatarUrl = info.avatarUrl
+        )
         val nextRecipientsCount = (info.members.size - 1).coerceAtLeast(1)
         if (nextRecipientsCount == currentRecipientsCount) return
         currentRecipientsCount = nextRecipientsCount
         adapter?.updateRecipientsCount(currentRecipientsCount)
+    }
+
+    private fun bindChatHeaderAvatar(displayName: String, avatarUrl: String?) {
+        AvatarLoader.bind(
+            imageView = binding.ivChatAvatar,
+            fallbackView = binding.tvChatAvatarFallback,
+            displayName = displayName.ifBlank { chatTitle },
+            avatarUrl = avatarUrl
+        )
+    }
+
+    private fun openChatHeaderAvatarTarget() {
+        if (isGroupChat) {
+            showGroupInfo()
+            return
+        }
+        openUserProfile(
+            uid = chatPeerUid,
+            login = chatPeerLogin,
+            displayName = chatPeerDisplayName.ifBlank { chatTitle },
+            avatarUrl = chatAvatarUrl.ifBlank { null }
+        )
     }
 
     private fun openIncomingAvatarPreview(message: ChatMessage) {
@@ -3050,11 +3692,32 @@ class ChatActivity : AppCompatActivity() {
         startActivity(AvatarPreviewActivity.newIntent(this, displayName, avatarUrl))
     }
 
-    private fun openPhotoMessagePreview(message: ChatMessage) {
-        val photoUrl = message.imageUrl?.trim().orEmpty()
-        if (photoUrl.isBlank()) return
-        val displayName = message.senderName.ifBlank { getString(R.string.chat_fallback_title) }
-        startActivity(AvatarPreviewActivity.newIntent(this, displayName, photoUrl))
+    private fun resolveMessagePhotoUrls(message: ChatMessage): List<String> {
+        val photoUrls = message.imageUrls.asSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .toMutableList()
+        if (photoUrls.isEmpty()) {
+            message.imageUrl?.trim().orEmpty().takeIf { it.isNotBlank() }?.let(photoUrls::add)
+        }
+        return photoUrls
+    }
+
+    private fun openPhotoMessagePreview(message: ChatMessage, selectedPhotoIndex: Int, selectedPhotoUrl: String) {
+        val photoUrls = resolveMessagePhotoUrls(message).toMutableList()
+        if (photoUrls.isEmpty()) return
+        val targetIndex = if (selectedPhotoIndex in photoUrls.indices) {
+            selectedPhotoIndex
+        } else {
+            photoUrls.indexOf(selectedPhotoUrl.trim()).takeIf { it >= 0 } ?: 0
+        }
+        startActivity(
+            PhotoPreviewActivity.newIntent(
+                context = this,
+                photoUrls = photoUrls,
+                startIndex = targetIndex
+            )
+        )
     }
 
     private fun openVideoMessagePreview(message: ChatMessage) {
@@ -3112,6 +3775,11 @@ class ChatActivity : AppCompatActivity() {
         VIDEO
     }
 
+    private enum class PhotoSelectionTarget {
+        COMPOSE,
+        EDIT
+    }
+
     companion object {
         const val EXTRA_CHAT_ID = "extra_chat_id"
         const val EXTRA_CHAT_TITLE = "extra_chat_title"
@@ -3132,6 +3800,7 @@ class ChatActivity : AppCompatActivity() {
         private const val VOICE_PREVIEW_TEXT = "\uD83C\uDFA4 Voice message"
         private const val PHOTO_PREVIEW_TEXT = "\uD83D\uDCF7 \u0424\u043E\u0442\u043E"
         private const val VIDEO_PREVIEW_TEXT = "\uD83C\uDFA5 \u0412\u0438\u0434\u0435\u043E"
+        private const val MAX_PHOTO_DRAFTS = 10
         private const val MAX_VOICE_RECORD_DURATION_SEC = 600
         private const val MAX_VIDEO_RECORD_DURATION_SEC = 60
         private const val SWIPE_REPLY_MAX_SHIFT_FRACTION = 0.36f
@@ -3141,6 +3810,9 @@ class ChatActivity : AppCompatActivity() {
         private const val DEFAULT_EMOJI_PANEL_HEIGHT_DP = 248f
         private const val MIN_KEYBOARD_HEIGHT_TRACK_PX = 120
         private const val KEYBOARD_TRANSITION_COMPLETION_GAP_DP = 12f
+        private const val KEYBOARD_INSET_SMALL_STEP_DP = 2f
+        private const val KEYBOARD_INSET_ANIMATION_TRIGGER_DP = 8f
+        private const val KEYBOARD_INSET_ANIMATION_MS = 180L
         private const val EMOJI_GRID_SPAN_COUNT = 8
         private const val EMOJI_GRID_HORIZONTAL_SPACING_DP = 6f
         private const val EMOJI_GRID_VERTICAL_SPACING_DP = 4f
@@ -3178,6 +3850,34 @@ class ChatActivity : AppCompatActivity() {
         val index: Int,
         val offsetPx: Int
     )
+
+    private data class PendingEditedMessage(
+        val serverMessageId: String,
+        val replacement: ChatMessage
+    )
+
+    private data class InlineEditState(
+        val message: ChatMessage,
+        val serverMessageId: String
+    )
+
+    private data class PhotoDraftPreview(
+        val source: String,
+        val existingUrl: String?,
+        val selectedUriIndex: Int?
+    )
 }
+
+private data class PhotoDraftUpload(
+    val bytes: ByteArray,
+    val width: Int,
+    val height: Int,
+    val fileName: String
+)
+
+private data class PreparedEditedPhoto(
+    val url: String?,
+    val upload: PhotoDraftUpload?
+)
 
 

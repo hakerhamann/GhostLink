@@ -1,4 +1,5 @@
 import hashlib
+import ipaddress
 import json
 import os
 import secrets
@@ -116,9 +117,12 @@ def init_db():
                 text TEXT NOT NULL,
                 kind TEXT NOT NULL DEFAULT 'text',
                 media_url TEXT,
+                media_urls TEXT,
                 media_duration INTEGER NOT NULL DEFAULT 0,
                 media_width INTEGER NOT NULL DEFAULT 0,
                 media_height INTEGER NOT NULL DEFAULT 0,
+                media_widths TEXT,
+                media_heights TEXT,
                 reply_to_message_id INTEGER,
                 reply_to_sender_name TEXT,
                 reply_to_text TEXT,
@@ -159,9 +163,12 @@ def init_db():
         ensure_column(db, "messages", "updated_at", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(db, "messages", "kind", "TEXT NOT NULL DEFAULT 'text'")
         ensure_column(db, "messages", "media_url", "TEXT")
+        ensure_column(db, "messages", "media_urls", "TEXT")
         ensure_column(db, "messages", "media_duration", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(db, "messages", "media_width", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(db, "messages", "media_height", "INTEGER NOT NULL DEFAULT 0")
+        ensure_column(db, "messages", "media_widths", "TEXT")
+        ensure_column(db, "messages", "media_heights", "TEXT")
         ensure_column(db, "messages", "reply_to_message_id", "INTEGER")
         ensure_column(db, "messages", "reply_to_sender_name", "TEXT")
         ensure_column(db, "messages", "reply_to_text", "TEXT")
@@ -454,6 +461,55 @@ def normalize_photo_url(value: str | None) -> str | None:
     if raw.startswith("http://") or raw.startswith("https://"):
         return raw
     return f"{request.host_url.rstrip('/')}/uploads/photos/{raw}"
+
+
+def normalize_media_urls(value, normalizer=None) -> list[str]:
+    if value is None:
+        return []
+    raw = value
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            parsed = [raw]
+    elif isinstance(raw, (list, tuple)):
+        parsed = list(raw)
+    else:
+        return []
+
+    urls = []
+    for item in parsed:
+        normalized = str(item).strip()
+        if not normalized:
+            continue
+        if normalizer is not None:
+            normalized = normalizer(normalized)
+        if normalized:
+            urls.append(normalized)
+    return urls
+
+
+def normalize_int_list(value) -> list[int]:
+    if value is None:
+        return []
+    raw = value
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            parsed = [raw]
+    elif isinstance(raw, (list, tuple)):
+        parsed = list(raw)
+    else:
+        return []
+
+    return [max(0, parse_int(item, 0)) for item in parsed]
 
 
 def normalize_video_url(value: str | None) -> str | None:
@@ -776,8 +832,11 @@ def build_message_json(db: sqlite3.Connection, row: sqlite3.Row, chat_id: int) -
     voice_url = None
     voice_duration = 0
     image_url = None
+    image_urls = []
     image_width = 0
     image_height = 0
+    image_widths = []
+    image_heights = []
     video_url = None
     video_duration = 0
     if message_kind == "voice":
@@ -787,8 +846,17 @@ def build_message_json(db: sqlite3.Connection, row: sqlite3.Row, chat_id: int) -
             text = VOICE_MESSAGE_FALLBACK_TEXT
     elif message_kind == "image":
         image_url = normalize_photo_url(row["media_url"])
+        image_urls = normalize_media_urls(row["media_urls"], normalize_photo_url)
+        if not image_urls and image_url is not None:
+            image_urls = [image_url]
         image_width = max(0, int(row["media_width"] or 0))
         image_height = max(0, int(row["media_height"] or 0))
+        image_widths = normalize_int_list(row["media_widths"] if "media_widths" in row.keys() else None)
+        image_heights = normalize_int_list(row["media_heights"] if "media_heights" in row.keys() else None)
+        if not image_widths and image_width > 0:
+            image_widths = [image_width]
+        if not image_heights and image_height > 0:
+            image_heights = [image_height]
         if not text.strip():
             text = IMAGE_MESSAGE_FALLBACK_TEXT
     elif message_kind == "video":
@@ -806,12 +874,35 @@ def build_message_json(db: sqlite3.Connection, row: sqlite3.Row, chat_id: int) -
     if reply_to_message_id > 0:
         reply_sender_name = str(row["reply_to_sender_name"] or "").strip()
         reply_text = str(row["reply_to_text"] or "").strip()
+        reply_image_url = None
+        reply_media_row = db.execute(
+            """
+            SELECT kind, text, media_url, media_urls
+            FROM messages
+            WHERE id = ? AND chat_id = ?
+            LIMIT 1
+            """,
+            (reply_to_message_id, chat_id),
+        ).fetchone()
+        if reply_media_row is not None:
+            reply_kind = str(reply_media_row["kind"] or "").strip().lower()
+            if reply_kind == "image":
+                reply_image_urls = normalize_media_urls(reply_media_row["media_urls"], normalize_photo_url)
+                if reply_image_urls:
+                    reply_image_url = reply_image_urls[0]
+                else:
+                    reply_image_url = normalize_photo_url(reply_media_row["media_url"])
+            if reply_kind in ("text", "image"):
+                original_reply_text = normalize_reply_preview_text(reply_media_row["text"])
+                if original_reply_text and original_reply_text != IMAGE_MESSAGE_FALLBACK_TEXT:
+                    reply_text = original_reply_text
         if not reply_text:
             reply_text = "..."
         reply_to = {
             "messageId": str(reply_to_message_id),
             "senderName": reply_sender_name,
             "text": reply_text,
+            "imageUrl": reply_image_url,
         }
 
     return {
@@ -828,8 +919,11 @@ def build_message_json(db: sqlite3.Connection, row: sqlite3.Row, chat_id: int) -
         "voiceUrl": voice_url,
         "voiceDurationSec": voice_duration,
         "imageUrl": image_url,
+        "imageUrls": image_urls,
         "imageWidth": image_width,
         "imageHeight": image_height,
+        "imageWidths": image_widths,
+        "imageHeights": image_heights,
         "videoUrl": video_url,
         "videoDurationSec": video_duration,
         "replyTo": reply_to,
@@ -851,6 +945,23 @@ def parse_int(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def normalize_reply_preview_text(value) -> str:
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if len(text) > 170:
+        return f"{text[:167]}..."
+    return text
+
+
+def normalize_ip_address(value: str) -> str:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return ""
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return ""
 
 
 def load_update_feed() -> list[dict]:
@@ -885,6 +996,35 @@ def load_update_feed() -> list[dict]:
                 if value:
                     changes.append(value)
 
+        allowed_logins_raw = raw.get("targetLogins", raw.get("allowedLogins", []))
+        blocked_logins_raw = raw.get("excludeLogins", [])
+        allowed_ips_raw = raw.get("targetIps", raw.get("allowedIps", []))
+        blocked_ips_raw = raw.get("excludeIps", [])
+        allowed_logins: set[str] = set()
+        blocked_logins: set[str] = set()
+        allowed_ips: set[str] = set()
+        blocked_ips: set[str] = set()
+        if isinstance(allowed_logins_raw, list):
+            for login_value in allowed_logins_raw:
+                normalized_login = normalize_login(str(login_value))
+                if normalized_login:
+                    allowed_logins.add(normalized_login)
+        if isinstance(blocked_logins_raw, list):
+            for login_value in blocked_logins_raw:
+                normalized_login = normalize_login(str(login_value))
+                if normalized_login:
+                    blocked_logins.add(normalized_login)
+        if isinstance(allowed_ips_raw, list):
+            for ip_value in allowed_ips_raw:
+                normalized_ip = normalize_ip_address(str(ip_value))
+                if normalized_ip:
+                    allowed_ips.add(normalized_ip)
+        if isinstance(blocked_ips_raw, list):
+            for ip_value in blocked_ips_raw:
+                normalized_ip = normalize_ip_address(str(ip_value))
+                if normalized_ip:
+                    blocked_ips.add(normalized_ip)
+
         file_name_raw = raw.get("fileName")
         file_name = str(file_name_raw).strip() if file_name_raw is not None else ""
         sha_raw = raw.get("sha256")
@@ -900,6 +1040,10 @@ def load_update_feed() -> list[dict]:
                 "fileName": (file_name or None),
                 "fileSize": parse_int(raw.get("fileSize"), 0),
                 "sha256": (sha256 or None),
+                "targetLogins": sorted(allowed_logins),
+                "excludeLogins": sorted(blocked_logins),
+                "targetIps": sorted(allowed_ips),
+                "excludeIps": sorted(blocked_ips),
             }
         )
 
@@ -908,6 +1052,51 @@ def load_update_feed() -> list[dict]:
         reverse=True,
     )
     return normalized
+
+
+def resolve_update_request_login() -> str:
+    header = request.headers.get("Authorization", "")
+    if header.startswith("Bearer "):
+        token = header[7:].strip()
+        if token:
+            row = get_db().execute(
+                """
+                SELECT u.login
+                FROM sessions s
+                JOIN users u ON u.id = s.user_id
+                WHERE s.token = ?
+                """,
+                (token,),
+            ).fetchone()
+            if row is not None:
+                return normalize_login(row["login"])
+
+    return normalize_login(request.args.get("login", ""))
+
+
+def resolve_update_request_ip() -> str:
+    return normalize_ip_address(request.remote_addr or "")
+
+
+def is_update_visible_for_request(raw: dict, login: str, request_ip: str) -> bool:
+    safe_login = normalize_login(login)
+    safe_ip = normalize_ip_address(request_ip)
+    allowed_logins = {normalize_login(item) for item in (raw.get("targetLogins") or []) if normalize_login(item)}
+    blocked_logins = {normalize_login(item) for item in (raw.get("excludeLogins") or []) if normalize_login(item)}
+    allowed_ips = {normalize_ip_address(item) for item in (raw.get("targetIps") or []) if normalize_ip_address(item)}
+    blocked_ips = {normalize_ip_address(item) for item in (raw.get("excludeIps") or []) if normalize_ip_address(item)}
+
+    if allowed_logins or allowed_ips:
+        login_allowed = bool(safe_login and safe_login in allowed_logins)
+        ip_allowed = bool(safe_ip and safe_ip in allowed_ips)
+        if not (login_allowed or ip_allowed):
+            return False
+
+    if blocked_logins and safe_login and safe_login in blocked_logins:
+        return False
+    if blocked_ips and safe_ip and safe_ip in blocked_ips:
+        return False
+    return True
 
 
 def build_update_entry(raw: dict) -> dict:
@@ -971,7 +1160,9 @@ def serve_update_apk(filename: str):
 @app.get("/api/updates")
 def updates_info():
     current_version_code = parse_int(request.args.get("currentVersionCode"), 0)
-    history_feed = load_update_feed()
+    request_login = resolve_update_request_login()
+    request_ip = resolve_update_request_ip()
+    history_feed = [item for item in load_update_feed() if is_update_visible_for_request(item, request_login, request_ip)]
     history = [build_update_entry(item) for item in history_feed]
     latest = history[0] if history else None
     has_update = bool(latest and int(latest["versionCode"]) > current_version_code)
@@ -1587,9 +1778,12 @@ def list_messages(chat_id: str):
             m.text,
             m.kind,
             m.media_url,
+            m.media_urls,
             m.media_duration,
             m.media_width,
             m.media_height,
+            m.media_widths,
+            m.media_heights,
             m.reply_to_message_id,
             m.reply_to_sender_name,
             m.reply_to_text,
@@ -1627,9 +1821,12 @@ def send_message(chat_id: str):
 
     text = str(data.get("text", "")).strip()
     media_url = None
+    media_urls = None
     media_duration = 0
     media_width = 0
     media_height = 0
+    media_widths = None
+    media_heights = None
     reply_to_message_id = parse_int(data.get("replyToMessageId"), 0)
     reply_to_sender_name = None
     reply_to_text = None
@@ -1649,18 +1846,53 @@ def send_message(chat_id: str):
         if not text:
             text = VOICE_MESSAGE_FALLBACK_TEXT
     elif message_type == "image":
-        raw_photo_url = str(data.get("imageUrl", "")).strip()
-        photo_file_name = Path(raw_photo_url).name if raw_photo_url else ""
-        if not photo_file_name:
-            return jsonify({"error": "???? ?????????? ????????? ?? ???????"}), 400
+        raw_photo_urls = data.get("imageUrls")
+        if isinstance(raw_photo_urls, list):
+            photo_sources = [str(value).strip() for value in raw_photo_urls]
+        else:
+            raw_photo_url = str(data.get("imageUrl", "")).strip()
+            photo_sources = [raw_photo_url] if raw_photo_url else []
 
-        photo_path = PHOTO_DIR / photo_file_name
-        if not photo_path.exists() or not photo_path.is_file():
+        photo_file_names = [Path(value).name for value in photo_sources if value]
+        photo_file_names = [value for value in photo_file_names if value]
+        if not photo_file_names:
+            return jsonify({"error": "???? ?????????? ????????? ?? ???????"}), 400
+        if len(photo_file_names) > 10:
+            return jsonify({"error": "????????????? ?? 10 ????"}), 400
+
+        missing_photo = next(
+            (
+                file_name
+                for file_name in photo_file_names
+                if not (PHOTO_DIR / file_name).exists() or not (PHOTO_DIR / file_name).is_file()
+            ),
+            None,
+        )
+        if missing_photo is not None:
             return jsonify({"error": "????????? ???? ?? ??????"}), 404
 
-        media_url = photo_file_name
-        media_width = max(0, min(parse_int(data.get("imageWidth"), 0), 8192))
-        media_height = max(0, min(parse_int(data.get("imageHeight"), 0), 8192))
+        media_url = photo_file_names[0]
+        media_urls = json.dumps(photo_file_names, ensure_ascii=False)
+
+        raw_image_widths = data.get("imageWidths")
+        raw_image_heights = data.get("imageHeights")
+        if isinstance(raw_image_widths, list):
+            width_values = [max(0, min(parse_int(value, 0), 8192)) for value in raw_image_widths]
+        else:
+            width_values = [max(0, min(parse_int(data.get("imageWidth"), 0), 8192))]
+        if isinstance(raw_image_heights, list):
+            height_values = [max(0, min(parse_int(value, 0), 8192)) for value in raw_image_heights]
+        else:
+            height_values = [max(0, min(parse_int(data.get("imageHeight"), 0), 8192))]
+
+        while len(width_values) < len(photo_file_names):
+            width_values.append(0)
+        while len(height_values) < len(photo_file_names):
+            height_values.append(0)
+        media_width = width_values[0] if width_values else 0
+        media_height = height_values[0] if height_values else 0
+        media_widths = json.dumps(width_values[: len(photo_file_names)], ensure_ascii=False)
+        media_heights = json.dumps(height_values[: len(photo_file_names)], ensure_ascii=False)
         if not text:
             text = IMAGE_MESSAGE_FALLBACK_TEXT
     elif message_type == "video":
@@ -1699,15 +1931,15 @@ def send_message(chat_id: str):
             if reply_kind == "voice":
                 reply_to_text = VOICE_MESSAGE_FALLBACK_TEXT
             elif reply_kind == "image":
-                reply_to_text = IMAGE_MESSAGE_FALLBACK_TEXT
+                reply_to_text = normalize_reply_preview_text(reply_row["text"])
+                if not reply_to_text or reply_to_text == IMAGE_MESSAGE_FALLBACK_TEXT:
+                    reply_to_text = IMAGE_MESSAGE_FALLBACK_TEXT
             elif reply_kind == "video":
                 reply_to_text = VIDEO_MESSAGE_FALLBACK_TEXT
             else:
-                reply_to_text = str(reply_row["text"] or "").replace("\r", " ").replace("\n", " ").strip()
+                reply_to_text = normalize_reply_preview_text(reply_row["text"])
                 if not reply_to_text:
                     reply_to_text = "..."
-                if len(reply_to_text) > 170:
-                    reply_to_text = f"{reply_to_text[:167]}..."
         else:
             reply_to_message_id = 0
 
@@ -1720,16 +1952,19 @@ def send_message(chat_id: str):
             text,
             kind,
             media_url,
+            media_urls,
             media_duration,
             media_width,
             media_height,
+            media_widths,
+            media_heights,
             reply_to_message_id,
             reply_to_sender_name,
             reply_to_text,
             created_at,
             updated_at
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         """,
         (
             parsed_chat_id,
@@ -1737,9 +1972,12 @@ def send_message(chat_id: str):
             text,
             message_type,
             media_url,
+            media_urls,
             media_duration,
             media_width,
             media_height,
+            media_widths,
+            media_heights,
             reply_to_message_id if reply_to_message_id > 0 else None,
             reply_to_sender_name,
             reply_to_text,
@@ -1779,9 +2017,12 @@ def send_message(chat_id: str):
             m.text,
             m.kind,
             m.media_url,
+            m.media_urls,
             m.media_duration,
             m.media_width,
             m.media_height,
+            m.media_widths,
+            m.media_heights,
             m.reply_to_message_id,
             m.reply_to_sender_name,
             m.reply_to_text,
@@ -1820,25 +2061,110 @@ def edit_message(chat_id: str, message_id: str):
         return jsonify({"error": "?????? ?????????????? ?? ????????"}), 403
 
     message_row = db.execute(
-        "SELECT sender_id, kind FROM messages WHERE id = ? AND chat_id = ?",
+        """
+        SELECT
+            sender_id,
+            kind,
+            media_url,
+            media_urls,
+            media_width,
+            media_height,
+            media_widths,
+            media_heights
+        FROM messages
+        WHERE id = ? AND chat_id = ?
+        """,
         (parsed_message_id, parsed_chat_id),
     ).fetchone()
     if message_row is None:
         return jsonify({"error": "?????????????????? ???? ??????????????"}), 404
     if int(message_row["sender_id"]) != user_id:
         return jsonify({"error": "?????????? ?????????????????????????? ???????????? ???????? ??????????????????"}), 403
-    if str(message_row["kind"] or "text").strip().lower() != "text":
+    message_kind = str(message_row["kind"] or "text").strip().lower()
+    if message_kind not in {"text", "image"}:
         return jsonify({"error": "????????? ????????? ?????? ?????????????"}), 400
 
     data = request.get_json(silent=True) or {}
     text = str(data.get("text", "")).strip()
-    if not text:
+    media_url = message_row["media_url"]
+    media_urls = message_row["media_urls"]
+    media_width = max(0, int(message_row["media_width"] or 0))
+    media_height = max(0, int(message_row["media_height"] or 0))
+    media_widths = message_row["media_widths"]
+    media_heights = message_row["media_heights"]
+
+    if message_kind == "text" and not text:
         return jsonify({"error": "?????????? ?????????????????? ???? ?????????? ???????? ????????????"}), 400
+
+    if message_kind == "image":
+        raw_photo_urls = data.get("imageUrls")
+        if isinstance(raw_photo_urls, list):
+            photo_sources = [str(value).strip() for value in raw_photo_urls]
+        else:
+            raw_photo_url = str(data.get("imageUrl", "")).strip()
+            photo_sources = [raw_photo_url] if raw_photo_url else []
+
+        photo_sources = [value for value in photo_sources if value]
+        if photo_sources:
+            photo_file_names = [Path(value).name for value in photo_sources if value]
+            if not photo_file_names:
+                return jsonify({"error": "???? ?????????? ????????? ?? ???????"}), 400
+            if len(photo_file_names) > 10:
+                return jsonify({"error": "????????????? ?? 10 ????"}), 400
+
+            missing_photo = next(
+                (
+                    file_name
+                    for file_name in photo_file_names
+                    if not (PHOTO_DIR / file_name).exists() or not (PHOTO_DIR / file_name).is_file()
+                ),
+                None,
+            )
+            if missing_photo is not None:
+                return jsonify({"error": "????????? ???? ?? ??????"}), 404
+
+            media_url = photo_file_names[0]
+            media_urls = json.dumps(photo_file_names, ensure_ascii=False)
+
+            raw_image_widths = data.get("imageWidths")
+            raw_image_heights = data.get("imageHeights")
+            if isinstance(raw_image_widths, list):
+                width_values = [max(0, min(parse_int(value, 0), 8192)) for value in raw_image_widths]
+            else:
+                width_values = [max(0, min(parse_int(data.get("imageWidth"), 0), 8192))]
+            if isinstance(raw_image_heights, list):
+                height_values = [max(0, min(parse_int(value, 0), 8192)) for value in raw_image_heights]
+            else:
+                height_values = [max(0, min(parse_int(data.get("imageHeight"), 0), 8192))]
+
+            while len(width_values) < len(photo_file_names):
+                width_values.append(0)
+            while len(height_values) < len(photo_file_names):
+                height_values.append(0)
+            media_width = width_values[0] if width_values else 0
+            media_height = height_values[0] if height_values else 0
+            media_widths = json.dumps(width_values[: len(photo_file_names)], ensure_ascii=False)
+            media_heights = json.dumps(height_values[: len(photo_file_names)], ensure_ascii=False)
 
     ts = now_ms()
     db.execute(
-        "UPDATE messages SET text = ?, updated_at = ? WHERE id = ? AND chat_id = ?",
-        (text, ts, parsed_message_id, parsed_chat_id),
+        """
+        UPDATE messages
+        SET text = ?, media_url = ?, media_urls = ?, media_width = ?, media_height = ?, media_widths = ?, media_heights = ?, updated_at = ?
+        WHERE id = ? AND chat_id = ?
+        """,
+        (
+            text,
+            media_url,
+            media_urls,
+            media_width,
+            media_height,
+            media_widths,
+            media_heights,
+            ts,
+            parsed_message_id,
+            parsed_chat_id,
+        ),
     )
     db.execute(
         "UPDATE chats SET updated_at = ? WHERE id = ?",
@@ -1854,9 +2180,12 @@ def edit_message(chat_id: str, message_id: str):
             m.text,
             m.kind,
             m.media_url,
+            m.media_urls,
             m.media_duration,
             m.media_width,
             m.media_height,
+            m.media_widths,
+            m.media_heights,
             m.reply_to_message_id,
             m.reply_to_sender_name,
             m.reply_to_text,
@@ -1886,7 +2215,7 @@ def delete_message(chat_id: str, message_id: str):
         return jsonify({"error": "?????? ?????????????? ?? ????????"}), 403
 
     message_row = db.execute(
-        "SELECT sender_id, kind, media_url FROM messages WHERE id = ? AND chat_id = ?",
+        "SELECT sender_id, kind, media_url, media_urls FROM messages WHERE id = ? AND chat_id = ?",
         (parsed_message_id, parsed_chat_id),
     ).fetchone()
     if message_row is None:
@@ -1911,8 +2240,12 @@ def delete_message(chat_id: str, message_id: str):
 
     message_kind = str(message_row["kind"] or "text").strip().lower()
     if message_kind in {"voice", "image", "video"}:
-        media_value = str(message_row["media_url"] or "").strip()
-        if media_value and "://" not in media_value:
+        media_values = [str(message_row["media_url"] or "").strip()]
+        if message_kind == "image":
+            media_values.extend(normalize_media_urls(message_row["media_urls"]))
+        for media_value in media_values:
+            if not media_value or "://" in media_value:
+                continue
             if message_kind == "voice":
                 media_dir = VOICE_DIR
             elif message_kind == "image":

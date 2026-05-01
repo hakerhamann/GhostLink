@@ -72,9 +72,14 @@ class UpdateRepository(
     }
 
     suspend fun fetchUpdateInfo(currentCode: Int = currentVersionCode()): Result<UpdateInfo> = runCatching {
+        val loginParam = sessionStore.currentUser()?.login
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "&login=$it" }
+            .orEmpty()
         val response = apiClient.get(
-            path = "/api/updates?currentVersionCode=$currentCode",
-            withAuth = false
+            path = "/api/updates?currentVersionCode=$currentCode$loginParam",
+            withAuth = true
         )
         sessionStore.setUpdatesInfoCache(response.toString())
         parseUpdateInfoResponse(response, currentCode)

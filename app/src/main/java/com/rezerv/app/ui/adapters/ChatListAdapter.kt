@@ -15,7 +15,6 @@ class ChatListAdapter(
     private val onClick: (ChatPreview) -> Unit,
     private val onLongClick: (ChatPreview) -> Unit,
     private val onAvatarClick: (ChatPreview) -> Unit,
-    private val onNameClick: (ChatPreview) -> Unit,
     private val isPinned: (ChatPreview) -> Boolean
 ) : ListAdapter<ChatPreview, ChatListAdapter.ChatViewHolder>(DiffCallback) {
 
@@ -30,7 +29,6 @@ class ChatListAdapter(
             onClick = onClick,
             onLongClick = onLongClick,
             onAvatarClick = onAvatarClick,
-            onNameClick = onNameClick,
             isPinned = isPinned(getItem(position))
         )
     }
@@ -44,7 +42,6 @@ class ChatListAdapter(
             onClick: (ChatPreview) -> Unit,
             onLongClick: (ChatPreview) -> Unit,
             onAvatarClick: (ChatPreview) -> Unit,
-            onNameClick: (ChatPreview) -> Unit,
             isPinned: Boolean
         ) {
             AvatarLoader.bind(
@@ -80,11 +77,7 @@ class ChatListAdapter(
             binding.avatarContainer.setOnClickListener { onAvatarClick(item) }
             binding.ivAvatar.setOnClickListener { onAvatarClick(item) }
             binding.tvAvatarFallback.setOnClickListener { onAvatarClick(item) }
-            if (item.isGroup) {
-                binding.tvName.setOnClickListener { onClick(item) }
-            } else {
-                binding.tvName.setOnClickListener { onNameClick(item) }
-            }
+            binding.tvName.setOnClickListener { onClick(item) }
             binding.root.setOnClickListener { onClick(item) }
             binding.root.setOnLongClickListener {
                 onLongClick(item)

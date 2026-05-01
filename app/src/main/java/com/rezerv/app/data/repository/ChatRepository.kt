@@ -15,6 +15,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 
@@ -232,18 +233,35 @@ class ChatRepository(
 
     suspend fun sendPhotoMessage(
         chatId: String,
-        photoUrl: String,
+        photoUrls: List<String>,
         width: Int,
         height: Int,
+        widths: List<Int>? = null,
+        heights: List<Int>? = null,
+        caption: String? = null,
         fallbackText: String = PHOTO_PREVIEW_TEXT,
         replyToMessageId: String? = null
     ): ChatMessage {
+        val cleanedPhotoUrls = photoUrls
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .toList()
+        require(cleanedPhotoUrls.isNotEmpty()) { "Photo list is empty" }
+
         val payload = JSONObject()
             .put("type", "image")
-            .put("imageUrl", photoUrl)
+            .put("imageUrl", cleanedPhotoUrls.first())
+            .put("imageUrls", JSONArray(cleanedPhotoUrls))
             .put("imageWidth", width.coerceAtLeast(0))
             .put("imageHeight", height.coerceAtLeast(0))
-            .put("text", fallbackText)
+            .put("text", caption?.trim().takeUnless { it.isNullOrBlank() } ?: fallbackText)
+        widths?.takeIf { it.isNotEmpty() }?.let { values ->
+            payload.put("imageWidths", JSONArray(values.map { it.coerceAtLeast(0) }))
+        }
+        heights?.takeIf { it.isNotEmpty() }?.let { values ->
+            payload.put("imageHeights", JSONArray(values.map { it.coerceAtLeast(0) }))
+        }
         if (!replyToMessageId.isNullOrBlank()) {
             payload.put("replyToMessageId", replyToMessageId)
         }
@@ -278,13 +296,47 @@ class ChatRepository(
         return parseMessageFromSendResponse(response)
     }
 
-    suspend fun editMessage(chatId: String, messageId: String, text: String) {
-        val payload = text.trim()
-        if (payload.isBlank()) return
-        apiClient.put(
+    suspend fun editMessage(
+        chatId: String,
+        messageId: String,
+        text: String,
+        imageUrls: List<String>? = null,
+        imageWidths: List<Int>? = null,
+        imageHeights: List<Int>? = null
+    ): ChatMessage {
+        val payload = JSONObject().put("text", text.trim())
+        val cleanedImageUrls = imageUrls
+            ?.asSequence()
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            ?.takeIf { it.any() }
+            ?.toList()
+        if (cleanedImageUrls != null) {
+            payload.put("imageUrl", cleanedImageUrls.first())
+            payload.put("imageUrls", JSONArray(cleanedImageUrls))
+
+            val cleanedWidths = imageWidths
+                ?.map { it.coerceAtLeast(0) }
+                ?.takeIf { it.isNotEmpty() }
+            val cleanedHeights = imageHeights
+                ?.map { it.coerceAtLeast(0) }
+                ?.takeIf { it.isNotEmpty() }
+
+            if (cleanedWidths != null) {
+                payload.put("imageWidths", JSONArray(cleanedWidths))
+            }
+            if (cleanedHeights != null) {
+                payload.put("imageHeights", JSONArray(cleanedHeights))
+            }
+        }
+
+        val response = apiClient.put(
             path = "/api/chats/$chatId/messages/$messageId",
-            payload = JSONObject().put("text", payload)
+            payload = payload
         )
+        val message = parseMessageFromSendResponse(response)
+        replaceCachedMessage(chatId, message)
+        return message
     }
 
     suspend fun deleteMessage(chatId: String, messageId: String) {
@@ -361,6 +413,21 @@ class ChatRepository(
         sessionStore.saveChatMessagesSnapshot(chatId, messages)
     }
 
+    fun replaceCachedMessage(chatId: String, message: ChatMessage) {
+        val normalizedChatId = chatId.trim()
+        val messageId = message.id.trim()
+        if (normalizedChatId.isBlank() || messageId.isBlank()) return
+        ensureMessagesCacheLoaded(normalizedChatId)
+        val current = messagesCache[normalizedChatId].orEmpty()
+        if (current.isEmpty()) return
+        val replaced = current.map { existing ->
+            if (existing.id == messageId) message else existing
+        }
+        if (replaced == current) return
+        messagesCache[normalizedChatId] = replaced
+        sessionStore.saveChatMessagesSnapshot(normalizedChatId, replaced)
+    }
+
     private suspend fun fetchChats(): List<ChatPreview> {
         val response = apiClient.get("/api/chats")
         val items = response.optJSONArray("items") ?: return emptyList()
@@ -394,6 +461,15 @@ class ChatRepository(
     }
 
     private fun parseChatMessage(item: JSONObject): ChatMessage {
+        val imageUrls = parseStringList(item.optJSONArray("imageUrls")).ifEmpty {
+            item.optString("imageUrl").trim().takeIf { it.isNotBlank() }?.let { listOf(it) }.orEmpty()
+        }
+        val imageWidths = parseIntList(item.optJSONArray("imageWidths")).ifEmpty {
+            item.optInt("imageWidth", 0).coerceAtLeast(0).takeIf { it > 0 }?.let { listOf(it) }.orEmpty()
+        }
+        val imageHeights = parseIntList(item.optJSONArray("imageHeights")).ifEmpty {
+            item.optInt("imageHeight", 0).coerceAtLeast(0).takeIf { it > 0 }?.let { listOf(it) }.orEmpty()
+        }
         val deliveredByJson = item.optJSONArray("deliveredBy")
         val deliveredBy = mutableListOf<String>()
         if (deliveredByJson != null) {
@@ -420,7 +496,7 @@ class ChatRepository(
             id = item.optString("id"),
             senderId = item.optString("senderId"),
             senderName = item.optString("senderName"),
-            senderAvatarUrl = item.optString("senderAvatarUrl").ifBlank { null },
+            senderAvatarUrl = item.optCleanString("senderAvatarUrl"),
             text = item.optString("text"),
             type = when (item.optString("type").lowercase()) {
                 "voice" -> MessageType.VOICE
@@ -428,22 +504,47 @@ class ChatRepository(
                 "video" -> MessageType.VIDEO
                 else -> MessageType.TEXT
             },
-            voiceUrl = item.optString("voiceUrl").ifBlank { null },
+            voiceUrl = item.optCleanString("voiceUrl"),
             voiceDurationSec = item.optInt("voiceDurationSec", 0).coerceAtLeast(0),
-            imageUrl = item.optString("imageUrl").ifBlank { null },
+            imageUrl = item.optCleanString("imageUrl"),
             imageWidth = item.optInt("imageWidth", 0).coerceAtLeast(0),
             imageHeight = item.optInt("imageHeight", 0).coerceAtLeast(0),
-            videoUrl = item.optString("videoUrl").ifBlank { null },
+            imageUrls = imageUrls,
+            imageWidths = imageWidths,
+            imageHeights = imageHeights,
+            videoUrl = item.optCleanString("videoUrl"),
             videoDurationSec = item.optInt("videoDurationSec", 0).coerceAtLeast(0),
             replyToMessageId = item.optJSONObject("replyTo")?.optString("messageId").orEmpty().ifBlank { null },
             replyToSenderName = item.optJSONObject("replyTo")?.optString("senderName").orEmpty().ifBlank { null },
             replyToText = item.optJSONObject("replyTo")?.optString("text").orEmpty().ifBlank { null },
+            replyToImageUrl = item.optJSONObject("replyTo")?.optCleanString("imageUrl"),
             timestamp = item.optLong("timestamp"),
             deliveredBy = deliveredBy,
             readBy = readBy,
             edited = item.optBoolean("edited"),
             sendState = MessageSendState.SENT
         )
+    }
+
+    private fun parseStringList(raw: JSONArray?): List<String> {
+        if (raw == null) return emptyList()
+        val values = ArrayList<String>(raw.length())
+        for (index in 0 until raw.length()) {
+            val value = raw.optString(index).trim()
+            if (value.isNotBlank()) {
+                values += value
+            }
+        }
+        return values
+    }
+
+    private fun parseIntList(raw: JSONArray?): List<Int> {
+        if (raw == null) return emptyList()
+        val values = ArrayList<Int>(raw.length())
+        for (index in 0 until raw.length()) {
+            values += raw.optInt(index, 0).coerceAtLeast(0)
+        }
+        return values
     }
 
     private fun parseChatPreview(raw: JSONObject): ChatPreview {
@@ -503,5 +604,10 @@ class ChatRepository(
         const val PHOTO_PREVIEW_TEXT = "\uD83D\uDCF7 \u0424\u043E\u0442\u043E"
         const val VIDEO_PREVIEW_TEXT = "\uD83C\uDFA5 \u0412\u0438\u0434\u0435\u043E"
     }
+}
+
+private fun JSONObject.optCleanString(name: String): String? {
+    if (isNull(name)) return null
+    return optString(name).trim().takeUnless { it.isBlank() || it.equals("null", ignoreCase = true) }
 }
 

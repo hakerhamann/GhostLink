@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingLeft="24dp"
+    android:paddingTop="20dp"
+    android:paddingRight="24dp"
+    android:paddingBottom="8dp">
+
+    <EditText
+        android:id="@+id/etPhotoCaption"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@android:drawable/edit_text"
+        android:hint="Подпись к фото"
+        android:inputType="textMultiLine|textCapSentences"
+        android:minLines="3"
+        android:maxLines="5"
+        android:padding="16dp"
+        android:textColor="#E7F2E5"
+        android:textColorHint="#93A994" />
+
+    <TextView
+        android:id="@+id/tvPhotoSelectionSummary"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:textColor="#B9C7B3"
+        android:textSize="14sp"
+        android:text="Текущие фото: 0" />
+
+    <Button
+        android:id="@+id/btnReplacePhotoSelection"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="Выбрать другие фото" />
+
+    <Button
+        android:id="@+id/btnResetPhotoSelection"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Сбросить выбор" />
+
+</LinearLayout>

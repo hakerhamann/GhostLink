@@ -30,6 +30,7 @@ backend/fcm-service-account.json
 
 # Python backend local artifacts
 backend/.venv/
+backend/updates/
 backend/reserv.db
 **/__pycache__/
 **/*.pyc

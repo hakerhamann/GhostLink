@@ -40,15 +40,34 @@
                 android:textSize="11sp"
                 android:textStyle="bold" />
 
-            <TextView
-                android:id="@+id/tvReplyText"
+            <LinearLayout
+                android:id="@+id/replyContentRow"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:ellipsize="end"
-                android:maxLines="3"
-                android:maxWidth="250dp"
-                android:textColor="@color/ghost_text_secondary"
-                android:textSize="11sp" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <ImageView
+                    android:id="@+id/ivReplyImage"
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:layout_marginTop="2dp"
+                    android:layout_marginEnd="7dp"
+                    android:background="@drawable/bg_message_image"
+                    android:clipToOutline="true"
+                    android:scaleType="centerCrop"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/tvReplyText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="3"
+                    android:maxWidth="205dp"
+                    android:textColor="@color/ghost_text_secondary"
+                    android:textSize="11sp" />
+            </LinearLayout>
         </LinearLayout>
 
         <ImageView
@@ -61,6 +80,15 @@
             android:clipToOutline="true"
             android:contentDescription="image_message"
             android:scaleType="centerCrop"
+            android:visibility="gone" />
+
+        <android.widget.GridLayout
+            android:id="@+id/photoAlbumGrid"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:columnCount="2"
+            android:useDefaultMargins="true"
             android:visibility="gone" />
 
         <FrameLayout

@@ -36,6 +36,10 @@
             android:exported="false"
             android:theme="@style/Theme.Reserv" />
         <activity
+            android:name=".chat.PhotoPreviewActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Reserv" />
+        <activity
             android:name=".profile.UserProfileActivity"
             android:exported="false" />
         <activity

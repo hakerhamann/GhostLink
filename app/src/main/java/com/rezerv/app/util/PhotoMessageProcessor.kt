@@ -18,11 +18,16 @@ data class ProcessedPhoto(
     val fileName: String
 )
 
+data class PhotoDisplaySize(
+    val width: Int,
+    val height: Int
+)
+
 object PhotoMessageProcessor {
 
-    private const val MAX_DECODE_SIDE = 2560
-    private const val TARGET_SIDE = 1920
-    private const val TARGET_MAX_BYTES = 1_600_000
+    private const val MAX_DECODE_SIDE = 1920
+    private const val TARGET_SIDE = 1600
+    private const val TARGET_MAX_BYTES = 1_200_000
     private const val MIN_SIDE = 640
     private const val START_QUALITY = 88
     private const val MIN_QUALITY = 62
@@ -61,6 +66,29 @@ object PhotoMessageProcessor {
 
         working.recycle()
         result
+    }
+
+    suspend fun readDisplaySize(context: Context, uri: Uri): PhotoDisplaySize? = withContext(Dispatchers.IO) {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            BitmapFactory.decodeStream(input, null, bounds)
+        }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
+
+        val orientation = context.contentResolver.openInputStream(uri)?.use { input ->
+            ExifInterface(input).getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL
+            )
+        } ?: ExifInterface.ORIENTATION_NORMAL
+
+        val swapsSides = orientation == ExifInterface.ORIENTATION_ROTATE_90 ||
+            orientation == ExifInterface.ORIENTATION_ROTATE_270
+        if (swapsSides) {
+            PhotoDisplaySize(width = bounds.outHeight, height = bounds.outWidth)
+        } else {
+            PhotoDisplaySize(width = bounds.outWidth, height = bounds.outHeight)
+        }
     }
 
     private fun decodeSampledBitmap(context: Context, uri: Uri, maxSize: Int): Bitmap? {

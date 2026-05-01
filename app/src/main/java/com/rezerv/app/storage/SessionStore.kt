@@ -487,11 +487,25 @@ class SessionStore(context: Context) {
             .put("imageUrl", message.imageUrl)
             .put("imageWidth", message.imageWidth)
             .put("imageHeight", message.imageHeight)
+            .put("imageUrls", JSONArray().apply {
+                message.imageUrls
+                    .asSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .forEach { put(it) }
+            })
+            .put("imageWidths", JSONArray().apply {
+                message.imageWidths.forEach { put(it.coerceAtLeast(0)) }
+            })
+            .put("imageHeights", JSONArray().apply {
+                message.imageHeights.forEach { put(it.coerceAtLeast(0)) }
+            })
             .put("videoUrl", message.videoUrl)
             .put("videoDurationSec", message.videoDurationSec)
             .put("replyToMessageId", message.replyToMessageId)
             .put("replyToSenderName", message.replyToSenderName)
             .put("replyToText", message.replyToText)
+            .put("replyToImageUrl", message.replyToImageUrl)
             .put("timestamp", message.timestamp)
             .put("deliveredBy", deliveredBy)
             .put("readBy", readBy)
@@ -531,29 +545,64 @@ class SessionStore(context: Context) {
             else -> MessageType.TEXT
         }
 
+        val imageUrls = mutableListOf<String>()
+        val imageUrlsRaw = raw.optJSONArray("imageUrls")
+        if (imageUrlsRaw != null) {
+            for (index in 0 until imageUrlsRaw.length()) {
+                val value = imageUrlsRaw.optString(index).trim()
+                if (value.isNotBlank()) {
+                    imageUrls += value
+                }
+            }
+        } else {
+            val fallbackImageUrl = raw.optString("imageUrl").trim()
+            if (fallbackImageUrl.isNotBlank()) {
+                imageUrls += fallbackImageUrl
+            }
+        }
+        val imageWidths = parseIntList(raw.optJSONArray("imageWidths")).ifEmpty {
+            raw.optInt("imageWidth", 0).coerceAtLeast(0).takeIf { it > 0 }?.let { listOf(it) }.orEmpty()
+        }
+        val imageHeights = parseIntList(raw.optJSONArray("imageHeights")).ifEmpty {
+            raw.optInt("imageHeight", 0).coerceAtLeast(0).takeIf { it > 0 }?.let { listOf(it) }.orEmpty()
+        }
+
         return ChatMessage(
             id = id,
             senderId = raw.optString("senderId"),
             senderName = raw.optString("senderName"),
-            senderAvatarUrl = raw.optString("senderAvatarUrl").ifBlank { null },
+            senderAvatarUrl = raw.optCleanString("senderAvatarUrl"),
             text = raw.optString("text"),
             type = type,
-            voiceUrl = raw.optString("voiceUrl").ifBlank { null },
+            voiceUrl = raw.optCleanString("voiceUrl"),
             voiceDurationSec = raw.optInt("voiceDurationSec", 0).coerceAtLeast(0),
-            imageUrl = raw.optString("imageUrl").ifBlank { null },
+            imageUrl = raw.optCleanString("imageUrl"),
             imageWidth = raw.optInt("imageWidth", 0).coerceAtLeast(0),
             imageHeight = raw.optInt("imageHeight", 0).coerceAtLeast(0),
-            videoUrl = raw.optString("videoUrl").ifBlank { null },
+            imageUrls = imageUrls,
+            imageWidths = imageWidths,
+            imageHeights = imageHeights,
+            videoUrl = raw.optCleanString("videoUrl"),
             videoDurationSec = raw.optInt("videoDurationSec", 0).coerceAtLeast(0),
             replyToMessageId = raw.optString("replyToMessageId").ifBlank { null },
             replyToSenderName = raw.optString("replyToSenderName").ifBlank { null },
             replyToText = raw.optString("replyToText").ifBlank { null },
+            replyToImageUrl = raw.optCleanString("replyToImageUrl"),
             timestamp = raw.optLong("timestamp", 0L),
             deliveredBy = deliveredBy,
             readBy = readBy,
             edited = raw.optBoolean("edited", false),
             sendState = MessageSendState.SENT
         )
+    }
+
+    private fun parseIntList(raw: JSONArray?): List<Int> {
+        if (raw == null) return emptyList()
+        val values = ArrayList<Int>(raw.length())
+        for (index in 0 until raw.length()) {
+            values += raw.optInt(index, 0).coerceAtLeast(0)
+        }
+        return values
     }
 
     private companion object {
@@ -637,4 +686,9 @@ class SessionStore(context: Context) {
         val anchorOffsetPx: Int,
         val wasAtBottom: Boolean
     )
+}
+
+private fun JSONObject.optCleanString(name: String): String? {
+    if (isNull(name)) return null
+    return optString(name).trim().takeUnless { it.isBlank() || it.equals("null", ignoreCase = true) }
 }
