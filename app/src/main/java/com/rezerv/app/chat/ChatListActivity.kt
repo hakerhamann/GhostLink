@@ -40,6 +40,7 @@ import com.rezerv.app.profile.AvatarPreviewActivity
 import com.rezerv.app.profile.UserProfileActivity
 import com.rezerv.app.settings.SettingsActivity
 import com.rezerv.app.ui.adapters.ChatListAdapter
+import com.rezerv.app.ui.dialog.ActionSheetDialog
 import com.rezerv.app.updates.UpdatesActivity
 import com.rezerv.app.util.AvatarLoader
 import kotlinx.coroutines.delay
@@ -328,23 +329,24 @@ class ChatListActivity : AppCompatActivity() {
         binding.tvEmpty.isVisible = sorted.isEmpty()
     }
 
-    private fun showChatActionsMenu(chat: ChatPreview) {
+    private fun showChatActionsMenu(chat: ChatPreview, rawX: Float, rawY: Float) {
         val chatPinned = pinnedChatIds.contains(chat.id)
         val pinLabel = if (chatPinned) {
             getString(R.string.chat_action_unpin)
         } else {
             getString(R.string.chat_action_pin)
         }
-        val options = arrayOf(pinLabel, getString(R.string.chat_action_delete))
-        MaterialAlertDialogBuilder(this)
-            .setTitle(chat.title)
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> setPinnedState(chat, !chatPinned)
-                    1 -> confirmHideChat(chat)
+        ActionSheetDialog.showAtPoint(
+            this,
+            listOf(
+                ActionSheetDialog.Action(pinLabel) { setPinnedState(chat, !chatPinned) },
+                ActionSheetDialog.Action(getString(R.string.chat_action_delete), destructive = true) {
+                    confirmHideChat(chat)
                 }
-            }
-            .show()
+            ),
+            rawX,
+            rawY
+        )
     }
 
     private fun confirmHideChat(chat: ChatPreview) {

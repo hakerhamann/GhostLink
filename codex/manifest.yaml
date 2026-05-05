@@ -1,0 +1,161 @@
+project: GhostLink
+created_from_head: 2b8ec5c
+baseline_tags:
+  - baseline/codex-20260501
+  - v1.9.58
+default_context_excludes:
+  - backend/update_feed.json
+  - backend/updates/**
+  - "**/*.apk"
+  - app/build/**
+  - backend/.venv/**
+source_of_truth:
+  - app/src/main/java/**
+  - backend/**
+  - app/src/main/AndroidManifest.xml
+  - app/build.gradle.kts
+  - gradle.properties
+docs:
+  - docs/codex/INDEX.md
+  - docs/codex/ARCHITECTURE.md
+  - docs/codex/TESTS.md
+hot_files:
+  - path: app/src/main/java/com/rezerv/app/chat/ChatActivity.kt
+    summary: codex/summaries/ChatActivity.md
+    lines: 2389
+  - path: app/src/main/java/com/rezerv/app/chat/ChatEmojiKeyboardController.kt
+    summary: codex/summaries/ChatEmojiKeyboardController.md
+    lines: 511
+  - path: app/src/main/java/com/rezerv/app/chat/ChatViewportController.kt
+    summary: codex/summaries/ChatViewportController.md
+    lines: 155
+  - path: app/src/main/java/com/rezerv/app/chat/ChatReplyController.kt
+    summary: codex/summaries/ChatReplyController.md
+    lines: 129
+  - path: app/src/main/java/com/rezerv/app/chat/ChatOptimisticMessageStore.kt
+    summary: codex/summaries/ChatOptimisticMessageStore.md
+    lines: 327
+  - path: app/src/main/java/com/rezerv/app/chat/ChatInlineEditController.kt
+    summary: codex/summaries/ChatInlineEditController.md
+    lines: 134
+  - path: app/src/main/java/com/rezerv/app/chat/ChatRecordingController.kt
+    summary: codex/summaries/ChatRecordingController.md
+    lines: 578
+  - path: app/src/main/java/com/rezerv/app/ui/adapters/MessageAdapter.kt
+    summary: codex/summaries/MessageAdapter.md
+    lines: 574
+  - path: app/src/main/java/com/rezerv/app/ui/adapters/MessageVoiceBinder.kt
+    summary: codex/summaries/MessageVoiceBinder.md
+    lines: 74
+  - path: app/src/main/java/com/rezerv/app/ui/adapters/MessageVideoBinder.kt
+    summary: codex/summaries/MessageVideoBinder.md
+    lines: 31
+  - path: app/src/main/java/com/rezerv/app/ui/adapters/MessagePhotoBinder.kt
+    summary: codex/summaries/MessagePhotoBinder.md
+    lines: 446
+  - path: app/src/main/java/com/rezerv/app/ui/adapters/MessageReplyPreviewBinder.kt
+    summary: codex/summaries/MessageReplyPreviewBinder.md
+    lines: 57
+  - path: app/src/main/java/com/rezerv/app/ui/adapters/MessageStatusFormatter.kt
+    summary: codex/summaries/MessageStatusFormatter.md
+    lines: 60
+  - path: app/src/main/java/com/rezerv/app/storage/SessionStore.kt
+    summary: codex/summaries/SessionStore.md
+    lines: 320
+  - path: app/src/main/java/com/rezerv/app/storage/SessionMessageCacheStore.kt
+    summary: codex/summaries/SessionMessageCacheStore.md
+    lines: 252
+  - path: app/src/main/java/com/rezerv/app/storage/SessionUpdateStore.kt
+    summary: codex/summaries/SessionUpdateStore.md
+    lines: 66
+  - path: app/src/main/java/com/rezerv/app/storage/SessionRememberedAccountsStore.kt
+    summary: codex/summaries/SessionRememberedAccountsStore.md
+    lines: 104
+  - path: app/src/main/java/com/rezerv/app/storage/SessionVisibilityStore.kt
+    summary: codex/summaries/SessionVisibilityStore.md
+    lines: 123
+  - path: app/src/main/java/com/rezerv/app/data/repository/ChatRepository.kt
+    summary: codex/summaries/ChatRepository.md
+    lines: 401
+  - path: app/src/main/java/com/rezerv/app/data/repository/ChatJsonParsers.kt
+    summary: codex/summaries/ChatJsonParsers.md
+    lines: 138
+  - path: app/src/main/java/com/rezerv/app/data/repository/ChatMessageCache.kt
+    summary: codex/summaries/ChatMessageCache.md
+    lines: 55
+  - path: app/src/main/java/com/rezerv/app/data/repository/ChatMediaRepository.kt
+    summary: codex/summaries/ChatMediaRepository.md
+    lines: 116
+  - path: backend/server.py
+    summary: codex/summaries/backend_server.md
+    lines: 1177
+  - path: backend/db/schema.py
+    summary: codex/summaries/backend_db_schema.md
+    lines: 122
+  - path: backend/services/auth.py
+    summary: codex/summaries/backend_auth_service.md
+    lines: 31
+  - path: backend/services/push.py
+    summary: codex/summaries/backend_push_service.md
+    lines: 257
+  - path: backend/routes/push.py
+    summary: codex/summaries/backend_push_routes.md
+    lines: 59
+  - path: backend/routes/auth.py
+    summary: codex/summaries/backend_auth_routes.md
+    lines: 9
+  - path: backend/routes/profile.py
+    summary: codex/summaries/backend_profile_routes.md
+    lines: 9
+  - path: backend/routes/updates.py
+    summary: codex/summaries/backend_updates_routes.md
+    lines: 62
+  - path: backend/routes/uploads.py
+    summary: codex/summaries/backend_uploads_routes.md
+    lines: 23
+  - path: backend/routes/chat.py
+    summary: codex/summaries/backend_chat_routes.md
+    lines: 44
+  - path: backend/services/uploads.py
+    summary: codex/summaries/backend_uploads_service.md
+    lines: 110
+  - path: backend/services/chat_serialization.py
+    summary: codex/summaries/backend_chat_serialization_service.md
+    lines: 288
+  - path: backend/services/media_formatting.py
+    summary: codex/summaries/backend_media_formatting_service.md
+    lines: 105
+  - path: backend/services/chat_groups.py
+    summary: codex/summaries/backend_chat_groups_service.md
+    lines: 183
+  - path: backend/services/chat_creation.py
+    summary: codex/summaries/backend_chat_creation_service.md
+    lines: 81
+  - path: backend/services/chat_read.py
+    summary: codex/summaries/backend_chat_read_service.md
+    lines: 38
+  - path: backend/services/chat_lists.py
+    summary: codex/summaries/backend_chat_lists_service.md
+    lines: 24
+  - path: backend/services/chat_messages.py
+    summary: codex/summaries/backend_chat_messages_service.md
+    lines: 332
+  - path: backend/services/users.py
+    summary: codex/summaries/backend_users_service.md
+    lines: 77
+  - path: backend/services/updates.py
+    summary: codex/summaries/backend_updates_service.md
+    lines: 177
+baseline_checks:
+  testDebugUnitTest: pass_no_sources
+  assembleDebug: pass
+  backend_compileall: pass
+  emulator_smoke: skipped_no_adb_device_2026-05-06
+final_metrics:
+  backend_server_lines: 1177
+  codex_index_records: 78
+  backend_route_count: 32
+  final_testDebugUnitTest: pass_no_sources_2026-05-06
+  final_assembleDebug: pass_2026-05-06
+  final_backend_compileall: pass_2026-05-06
+  final_server_import: pass_2026-05-06

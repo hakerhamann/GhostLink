@@ -1,10 +1,8 @@
-﻿package com.rezerv.app.data.repository
+package com.rezerv.app.data.repository
 
 import com.rezerv.app.data.model.ChatMessage
 import com.rezerv.app.data.model.ChatPreview
 import com.rezerv.app.data.model.GroupInfo
-import com.rezerv.app.data.model.MessageSendState
-import com.rezerv.app.data.model.MessageType
 import com.rezerv.app.data.model.UserProfile
 import com.rezerv.app.network.ApiClient
 import com.rezerv.app.storage.SessionStore
@@ -26,7 +24,8 @@ class ChatRepository(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val chatsCache = ConcurrentHashMap<String, List<ChatPreview>>()
-    private val messagesCache = ConcurrentHashMap<String, List<ChatMessage>>()
+    private val messageCache = ChatMessageCache(sessionStore)
+    private val mediaRepository = ChatMediaRepository(apiClient)
     private val preloadingMessageChats = ConcurrentHashMap.newKeySet<String>()
 
     fun observeChats(
@@ -73,9 +72,9 @@ class ChatRepository(
         val job = scope.launch {
             var lastEmitted: List<ChatMessage>? = null
             var hasDeliveredNetworkSnapshot = false
-            ensureMessagesCacheLoaded(chatId)
-            if (messagesCache.containsKey(chatId)) {
-                val cached = messagesCache[chatId] ?: emptyList()
+            messageCache.ensureLoaded(chatId)
+            if (messageCache.contains(chatId)) {
+                val cached = messageCache.get(chatId)
                 lastEmitted = cached
                 onUpdate(cached)
             }
@@ -83,7 +82,7 @@ class ChatRepository(
                 runCatching {
                     fetchMessages(chatId)
                 }.onSuccess { messages ->
-                    cacheMessagesSnapshot(chatId, messages)
+                    messageCache.saveSnapshot(chatId, messages)
                     if (!hasDeliveredNetworkSnapshot || lastEmitted == null || messages != lastEmitted) {
                         lastEmitted = messages
                         onUpdate(messages)
@@ -105,7 +104,7 @@ class ChatRepository(
     suspend fun createDirectChat(otherLogin: String): ChatPreview {
         val payload = JSONObject().put("login", otherLogin.trim().lowercase())
         val response = apiClient.post(path = "/api/chats/direct", payload = payload)
-        return parseChatPreview(response.getJSONObject("chat"))
+        return ChatJsonParsers.chatPreview(response.getJSONObject("chat"))
     }
 
     suspend fun listUsers(query: String = ""): List<UserProfile> {
@@ -141,23 +140,23 @@ class ChatRepository(
             .put("title", title.trim())
             .put("members", membersArray)
         val response = apiClient.post(path = "/api/chats/group", payload = payload)
-        return parseChatPreview(response.getJSONObject("chat"))
+        return ChatJsonParsers.chatPreview(response.getJSONObject("chat"))
     }
 
     suspend fun uploadGroupAvatar(chatId: String, imageBytes: ByteArray): ChatPreview {
         val response = apiClient.uploadChatAvatar(chatId = chatId, imageBytes = imageBytes)
-        return parseChatPreview(response.getJSONObject("chat"))
+        return ChatJsonParsers.chatPreview(response.getJSONObject("chat"))
     }
 
     suspend fun getGroupInfo(chatId: String): GroupInfo {
         val response = apiClient.get("/api/chats/$chatId/group-info")
-        return parseGroupInfo(response)
+        return ChatJsonParsers.groupInfo(response)
     }
 
     suspend fun addUserToGroup(chatId: String, userLogin: String): GroupInfo {
         val payload = JSONObject().put("login", userLogin.trim().lowercase())
         val response = apiClient.post(path = "/api/chats/$chatId/members", payload = payload)
-        return parseGroupInfo(response)
+        return ChatJsonParsers.groupInfo(response)
     }
 
     suspend fun leaveGroup(chatId: String) {
@@ -167,7 +166,7 @@ class ChatRepository(
     suspend fun removeUserFromGroup(chatId: String, userLogin: String): GroupInfo {
         val payload = JSONObject().put("login", userLogin.trim().lowercase())
         val response = apiClient.delete(path = "/api/chats/$chatId/members", payload = payload)
-        return parseGroupInfo(response)
+        return ChatJsonParsers.groupInfo(response)
     }
 
     suspend fun sendMessage(
@@ -187,25 +186,19 @@ class ChatRepository(
             path = "/api/chats/$chatId/messages",
             payload = request
         )
-        return parseMessageFromSendResponse(response)
+        return ChatJsonParsers.messageFromSendResponse(response)
     }
 
     suspend fun uploadVoice(chatId: String, voiceBytes: ByteArray, fileName: String): String {
-        val response = apiClient.uploadVoice(chatId = chatId, voiceBytes = voiceBytes, fileName = fileName)
-        return response.optString("voiceUrl").ifBlank { null }
-            ?: response.optString("fileName").ifBlank { throw IllegalStateException("Voice upload failed") }
+        return mediaRepository.uploadVoice(chatId, voiceBytes, fileName)
     }
 
     suspend fun uploadPhoto(chatId: String, imageBytes: ByteArray, fileName: String): String {
-        val response = apiClient.uploadPhoto(chatId = chatId, imageBytes = imageBytes, fileName = fileName)
-        return response.optString("photoUrl").ifBlank { null }
-            ?: response.optString("fileName").ifBlank { throw IllegalStateException("Photo upload failed") }
+        return mediaRepository.uploadPhoto(chatId, imageBytes, fileName)
     }
 
     suspend fun uploadVideo(chatId: String, videoBytes: ByteArray, fileName: String): String {
-        val response = apiClient.uploadVideo(chatId = chatId, videoBytes = videoBytes, fileName = fileName)
-        return response.optString("videoUrl").ifBlank { null }
-            ?: response.optString("fileName").ifBlank { throw IllegalStateException("Video upload failed") }
+        return mediaRepository.uploadVideo(chatId, videoBytes, fileName)
     }
 
     suspend fun sendVoiceMessage(
@@ -215,20 +208,13 @@ class ChatRepository(
         fallbackText: String = "\uD83C\uDFA4 Voice message",
         replyToMessageId: String? = null
     ): ChatMessage {
-        val payload = JSONObject()
-            .put("type", "voice")
-            .put("voiceUrl", voiceUrl)
-            .put("voiceDurationSec", durationSec.coerceAtLeast(0))
-            .put("text", fallbackText)
-        if (!replyToMessageId.isNullOrBlank()) {
-            payload.put("replyToMessageId", replyToMessageId)
-        }
-
-        val response = apiClient.post(
-            path = "/api/chats/$chatId/messages",
-            payload = payload
+        return mediaRepository.sendVoiceMessage(
+            chatId = chatId,
+            voiceUrl = voiceUrl,
+            durationSec = durationSec,
+            fallbackText = fallbackText,
+            replyToMessageId = replyToMessageId
         )
-        return parseMessageFromSendResponse(response)
     }
 
     suspend fun sendPhotoMessage(
@@ -242,35 +228,17 @@ class ChatRepository(
         fallbackText: String = PHOTO_PREVIEW_TEXT,
         replyToMessageId: String? = null
     ): ChatMessage {
-        val cleanedPhotoUrls = photoUrls
-            .asSequence()
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .toList()
-        require(cleanedPhotoUrls.isNotEmpty()) { "Photo list is empty" }
-
-        val payload = JSONObject()
-            .put("type", "image")
-            .put("imageUrl", cleanedPhotoUrls.first())
-            .put("imageUrls", JSONArray(cleanedPhotoUrls))
-            .put("imageWidth", width.coerceAtLeast(0))
-            .put("imageHeight", height.coerceAtLeast(0))
-            .put("text", caption?.trim().takeUnless { it.isNullOrBlank() } ?: fallbackText)
-        widths?.takeIf { it.isNotEmpty() }?.let { values ->
-            payload.put("imageWidths", JSONArray(values.map { it.coerceAtLeast(0) }))
-        }
-        heights?.takeIf { it.isNotEmpty() }?.let { values ->
-            payload.put("imageHeights", JSONArray(values.map { it.coerceAtLeast(0) }))
-        }
-        if (!replyToMessageId.isNullOrBlank()) {
-            payload.put("replyToMessageId", replyToMessageId)
-        }
-
-        val response = apiClient.post(
-            path = "/api/chats/$chatId/messages",
-            payload = payload
+        return mediaRepository.sendPhotoMessage(
+            chatId = chatId,
+            photoUrls = photoUrls,
+            width = width,
+            height = height,
+            widths = widths,
+            heights = heights,
+            caption = caption,
+            fallbackText = fallbackText,
+            replyToMessageId = replyToMessageId
         )
-        return parseMessageFromSendResponse(response)
     }
 
     suspend fun sendVideoMessage(
@@ -280,20 +248,13 @@ class ChatRepository(
         fallbackText: String = VIDEO_PREVIEW_TEXT,
         replyToMessageId: String? = null
     ): ChatMessage {
-        val payload = JSONObject()
-            .put("type", "video")
-            .put("videoUrl", videoUrl)
-            .put("videoDurationSec", durationSec.coerceAtLeast(0))
-            .put("text", fallbackText)
-        if (!replyToMessageId.isNullOrBlank()) {
-            payload.put("replyToMessageId", replyToMessageId)
-        }
-
-        val response = apiClient.post(
-            path = "/api/chats/$chatId/messages",
-            payload = payload
+        return mediaRepository.sendVideoMessage(
+            chatId = chatId,
+            videoUrl = videoUrl,
+            durationSec = durationSec,
+            fallbackText = fallbackText,
+            replyToMessageId = replyToMessageId
         )
-        return parseMessageFromSendResponse(response)
     }
 
     suspend fun editMessage(
@@ -334,7 +295,7 @@ class ChatRepository(
             path = "/api/chats/$chatId/messages/$messageId",
             payload = payload
         )
-        val message = parseMessageFromSendResponse(response)
+        val message = ChatJsonParsers.messageFromSendResponse(response)
         replaceCachedMessage(chatId, message)
         return message
     }
@@ -369,12 +330,12 @@ class ChatRepository(
         if (targets.isEmpty()) return
 
         targets.forEach { chatId ->
-            ensureMessagesCacheLoaded(chatId)
-            if (messagesCache[chatId]?.isNotEmpty() == true) return@forEach
+            messageCache.ensureLoaded(chatId)
+            if (messageCache.raw(chatId)?.isNotEmpty() == true) return@forEach
             if (!preloadingMessageChats.add(chatId)) return@forEach
             scope.launch {
                 runCatching { fetchMessages(chatId) }
-                    .onSuccess { messages -> cacheMessagesSnapshot(chatId, messages) }
+                    .onSuccess { messages -> messageCache.saveSnapshot(chatId, messages) }
                 preloadingMessageChats.remove(chatId)
             }
         }
@@ -389,43 +350,15 @@ class ChatRepository(
     }
 
     fun hasCachedMessages(chatId: String): Boolean {
-        ensureMessagesCacheLoaded(chatId)
-        return messagesCache.containsKey(chatId)
+        return messageCache.contains(chatId)
     }
 
     fun getCachedMessages(chatId: String): List<ChatMessage> {
-        ensureMessagesCacheLoaded(chatId)
-        return messagesCache[chatId] ?: emptyList()
-    }
-
-    private fun ensureMessagesCacheLoaded(chatId: String) {
-        if (chatId.isBlank()) return
-        if (messagesCache.containsKey(chatId)) return
-        val persisted = sessionStore.chatMessagesSnapshot(chatId)
-        if (persisted.isNotEmpty()) {
-            messagesCache[chatId] = persisted
-        }
-    }
-
-    private fun cacheMessagesSnapshot(chatId: String, messages: List<ChatMessage>) {
-        if (chatId.isBlank()) return
-        messagesCache[chatId] = messages
-        sessionStore.saveChatMessagesSnapshot(chatId, messages)
+        return messageCache.get(chatId)
     }
 
     fun replaceCachedMessage(chatId: String, message: ChatMessage) {
-        val normalizedChatId = chatId.trim()
-        val messageId = message.id.trim()
-        if (normalizedChatId.isBlank() || messageId.isBlank()) return
-        ensureMessagesCacheLoaded(normalizedChatId)
-        val current = messagesCache[normalizedChatId].orEmpty()
-        if (current.isEmpty()) return
-        val replaced = current.map { existing ->
-            if (existing.id == messageId) message else existing
-        }
-        if (replaced == current) return
-        messagesCache[normalizedChatId] = replaced
-        sessionStore.saveChatMessagesSnapshot(normalizedChatId, replaced)
+        messageCache.replaceMessage(chatId, message)
     }
 
     private suspend fun fetchChats(): List<ChatPreview> {
@@ -435,7 +368,7 @@ class ChatRepository(
 
         for (index in 0 until items.length()) {
             val item = items.optJSONObject(index) ?: continue
-            result += parseChatPreview(item)
+            result += ChatJsonParsers.chatPreview(item)
         }
 
         return result
@@ -448,150 +381,10 @@ class ChatRepository(
 
         for (index in 0 until items.length()) {
             val item = items.optJSONObject(index) ?: continue
-            result += parseChatMessage(item)
+            result += ChatJsonParsers.chatMessage(item)
         }
 
         return result
-    }
-
-    private fun parseMessageFromSendResponse(response: JSONObject): ChatMessage {
-        val message = response.optJSONObject("message")
-            ?: throw IllegalStateException("Server returned no message payload")
-        return parseChatMessage(message)
-    }
-
-    private fun parseChatMessage(item: JSONObject): ChatMessage {
-        val imageUrls = parseStringList(item.optJSONArray("imageUrls")).ifEmpty {
-            item.optString("imageUrl").trim().takeIf { it.isNotBlank() }?.let { listOf(it) }.orEmpty()
-        }
-        val imageWidths = parseIntList(item.optJSONArray("imageWidths")).ifEmpty {
-            item.optInt("imageWidth", 0).coerceAtLeast(0).takeIf { it > 0 }?.let { listOf(it) }.orEmpty()
-        }
-        val imageHeights = parseIntList(item.optJSONArray("imageHeights")).ifEmpty {
-            item.optInt("imageHeight", 0).coerceAtLeast(0).takeIf { it > 0 }?.let { listOf(it) }.orEmpty()
-        }
-        val deliveredByJson = item.optJSONArray("deliveredBy")
-        val deliveredBy = mutableListOf<String>()
-        if (deliveredByJson != null) {
-            for (j in 0 until deliveredByJson.length()) {
-                val value = deliveredByJson.optString(j)
-                if (value.isNotBlank()) {
-                    deliveredBy += value
-                }
-            }
-        }
-
-        val readByJson = item.optJSONArray("readBy")
-        val readBy = mutableListOf<String>()
-        if (readByJson != null) {
-            for (j in 0 until readByJson.length()) {
-                val value = readByJson.optString(j)
-                if (value.isNotBlank()) {
-                    readBy += value
-                }
-            }
-        }
-
-        return ChatMessage(
-            id = item.optString("id"),
-            senderId = item.optString("senderId"),
-            senderName = item.optString("senderName"),
-            senderAvatarUrl = item.optCleanString("senderAvatarUrl"),
-            text = item.optString("text"),
-            type = when (item.optString("type").lowercase()) {
-                "voice" -> MessageType.VOICE
-                "image" -> MessageType.IMAGE
-                "video" -> MessageType.VIDEO
-                else -> MessageType.TEXT
-            },
-            voiceUrl = item.optCleanString("voiceUrl"),
-            voiceDurationSec = item.optInt("voiceDurationSec", 0).coerceAtLeast(0),
-            imageUrl = item.optCleanString("imageUrl"),
-            imageWidth = item.optInt("imageWidth", 0).coerceAtLeast(0),
-            imageHeight = item.optInt("imageHeight", 0).coerceAtLeast(0),
-            imageUrls = imageUrls,
-            imageWidths = imageWidths,
-            imageHeights = imageHeights,
-            videoUrl = item.optCleanString("videoUrl"),
-            videoDurationSec = item.optInt("videoDurationSec", 0).coerceAtLeast(0),
-            replyToMessageId = item.optJSONObject("replyTo")?.optString("messageId").orEmpty().ifBlank { null },
-            replyToSenderName = item.optJSONObject("replyTo")?.optString("senderName").orEmpty().ifBlank { null },
-            replyToText = item.optJSONObject("replyTo")?.optString("text").orEmpty().ifBlank { null },
-            replyToImageUrl = item.optJSONObject("replyTo")?.optCleanString("imageUrl"),
-            timestamp = item.optLong("timestamp"),
-            deliveredBy = deliveredBy,
-            readBy = readBy,
-            edited = item.optBoolean("edited"),
-            sendState = MessageSendState.SENT
-        )
-    }
-
-    private fun parseStringList(raw: JSONArray?): List<String> {
-        if (raw == null) return emptyList()
-        val values = ArrayList<String>(raw.length())
-        for (index in 0 until raw.length()) {
-            val value = raw.optString(index).trim()
-            if (value.isNotBlank()) {
-                values += value
-            }
-        }
-        return values
-    }
-
-    private fun parseIntList(raw: JSONArray?): List<Int> {
-        if (raw == null) return emptyList()
-        val values = ArrayList<Int>(raw.length())
-        for (index in 0 until raw.length()) {
-            values += raw.optInt(index, 0).coerceAtLeast(0)
-        }
-        return values
-    }
-
-    private fun parseChatPreview(raw: JSONObject): ChatPreview {
-        return ChatPreview(
-            id = raw.optString("id"),
-            title = raw.optString("title").ifBlank { "Чат" },
-            avatarUrl = raw.optString("avatarUrl").ifBlank { null },
-            peerUid = raw.optString("peerUid").ifBlank { null },
-            peerLogin = raw.optString("peerLogin").ifBlank { null },
-            peerDisplayName = raw.optString("peerDisplayName").ifBlank { null },
-            lastMessage = raw.optString("lastMessage"),
-            timestamp = raw.optLong("timestamp"),
-            unreadCount = raw.optInt("unreadCount"),
-            lastMessageOutgoing = raw.optBoolean("lastMessageOutgoing"),
-            lastMessageDelivered = raw.optBoolean("lastMessageDelivered", raw.optBoolean("lastMessageRead")),
-            lastMessageRead = raw.optBoolean("lastMessageRead"),
-            isGroup = raw.optBoolean("isGroup"),
-            memberCount = raw.optInt("memberCount")
-        )
-    }
-
-    private fun parseGroupInfo(response: JSONObject): GroupInfo {
-        val group = response.optJSONObject("group") ?: JSONObject()
-        val membersRaw = response.optJSONArray("members")
-        val members = ArrayList<UserProfile>(membersRaw?.length() ?: 0)
-
-        if (membersRaw != null) {
-            for (index in 0 until membersRaw.length()) {
-                val item = membersRaw.optJSONObject(index) ?: continue
-                members += UserProfile(
-                    uid = item.optString("uid"),
-                    login = item.optString("login"),
-                    displayName = item.optString("displayName").ifBlank { item.optString("login") },
-                    avatarUrl = item.optString("avatarUrl").ifBlank { null }
-                )
-            }
-        }
-
-        return GroupInfo(
-            chatId = group.optString("id"),
-            title = group.optString("title").ifBlank { "Группа" },
-            description = group.optString("description"),
-            avatarUrl = group.optString("avatarUrl").ifBlank { null },
-            createdByUid = group.optString("createdByUid").ifBlank { null },
-            createdByLogin = group.optString("createdByLogin").ifBlank { null },
-            members = members
-        )
     }
 
     fun shutdown() {
@@ -604,10 +397,5 @@ class ChatRepository(
         const val PHOTO_PREVIEW_TEXT = "\uD83D\uDCF7 \u0424\u043E\u0442\u043E"
         const val VIDEO_PREVIEW_TEXT = "\uD83C\uDFA5 \u0412\u0438\u0434\u0435\u043E"
     }
-}
-
-private fun JSONObject.optCleanString(name: String): String? {
-    if (isNull(name)) return null
-    return optString(name).trim().takeUnless { it.isBlank() || it.equals("null", ignoreCase = true) }
 }
 

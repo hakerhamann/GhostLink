@@ -1,6 +1,7 @@
 ﻿package com.rezerv.app.ui.adapters
 
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.ViewGroup
 import androidx.core.view.isVisible
 import androidx.recyclerview.widget.DiffUtil
@@ -13,7 +14,7 @@ import com.rezerv.app.util.Formatters
 
 class ChatListAdapter(
     private val onClick: (ChatPreview) -> Unit,
-    private val onLongClick: (ChatPreview) -> Unit,
+    private val onLongClick: (ChatPreview, Float, Float) -> Unit,
     private val onAvatarClick: (ChatPreview) -> Unit,
     private val isPinned: (ChatPreview) -> Boolean
 ) : ListAdapter<ChatPreview, ChatListAdapter.ChatViewHolder>(DiffCallback) {
@@ -40,7 +41,7 @@ class ChatListAdapter(
         fun bind(
             item: ChatPreview,
             onClick: (ChatPreview) -> Unit,
-            onLongClick: (ChatPreview) -> Unit,
+            onLongClick: (ChatPreview, Float, Float) -> Unit,
             onAvatarClick: (ChatPreview) -> Unit,
             isPinned: Boolean
         ) {
@@ -79,8 +80,23 @@ class ChatListAdapter(
             binding.tvAvatarFallback.setOnClickListener { onAvatarClick(item) }
             binding.tvName.setOnClickListener { onClick(item) }
             binding.root.setOnClickListener { onClick(item) }
+            var touchX = 0f
+            var touchY = 0f
+            binding.root.setOnTouchListener { _, event ->
+                if (event.action == MotionEvent.ACTION_DOWN || event.action == MotionEvent.ACTION_UP) {
+                    touchX = event.rawX
+                    touchY = event.rawY
+                }
+                false
+            }
             binding.root.setOnLongClickListener {
-                onLongClick(item)
+                if (touchX == 0f && touchY == 0f) {
+                    val location = IntArray(2)
+                    binding.root.getLocationOnScreen(location)
+                    touchX = location[0] + binding.root.width / 2f
+                    touchY = location[1] + binding.root.height / 2f
+                }
+                onLongClick(item, touchX, touchY)
                 true
             }
         }

@@ -2,8 +2,6 @@
 
 import android.content.Context
 import com.rezerv.app.data.model.ChatMessage
-import com.rezerv.app.data.model.MessageSendState
-import com.rezerv.app.data.model.MessageType
 import com.rezerv.app.data.model.UserProfile
 import org.json.JSONArray
 import org.json.JSONObject
@@ -11,6 +9,36 @@ import org.json.JSONObject
 class SessionStore(context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val messageCacheStore = SessionMessageCacheStore(
+        prefs = prefs,
+        uidKey = KEY_UID,
+        indexKey = KEY_CHAT_MESSAGES_INDEX,
+        cacheKeyPrefix = KEY_CHAT_MESSAGES_CACHE_PREFIX,
+        maxMessagesPerChat = MAX_CHAT_MESSAGES_PER_CHAT_CACHE,
+        maxCachedChats = MAX_CACHED_CHATS_WITH_MESSAGES
+    )
+    private val updateStore = SessionUpdateStore(
+        prefs = prefs,
+        availableCodeKey = KEY_AVAILABLE_UPDATE_CODE,
+        availableNameKey = KEY_AVAILABLE_UPDATE_NAME,
+        lastSeenCodeKey = KEY_LAST_SEEN_UPDATE_CODE,
+        downloadedCodeKey = KEY_DOWNLOADED_UPDATE_CODE,
+        downloadedPathKey = KEY_DOWNLOADED_UPDATE_PATH,
+        updatesInfoCacheKey = KEY_UPDATES_INFO_CACHE
+    )
+    private val rememberedAccountsStore = SessionRememberedAccountsStore(
+        prefs = prefs,
+        rememberedAccountsKey = KEY_REMEMBERED_ACCOUNTS_JSON,
+        normalizeServerUrl = ::normalizeServerUrl
+    )
+    private val visibilityStore = SessionVisibilityStore(
+        prefs = prefs,
+        uidKey = KEY_UID,
+        pinnedChatsKey = KEY_PINNED_CHATS,
+        pinnedChatsOrderKey = KEY_PINNED_CHATS_ORDER,
+        hiddenChatsKey = KEY_HIDDEN_CHATS,
+        hiddenMessagesKey = KEY_HIDDEN_MESSAGES
+    )
 
     fun getServerUrl(): String {
         return prefs.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL
@@ -36,13 +64,13 @@ class SessionStore(context: Context) {
             .putString(KEY_DISPLAY_NAME, user.displayName)
             .putString(KEY_AVATAR, user.avatarUrl)
             .apply()
-        saveRememberedAccount(token = token, user = user, serverUrl = getServerUrl())
+        rememberedAccountsStore.saveAccount(token = token, user = user, serverUrl = getServerUrl())
     }
 
     fun authToken(): String? = prefs.getString(KEY_TOKEN, null)
 
     fun clearSession() {
-        clearChatMessageSnapshotsForCurrentUser()
+        messageCacheStore.clearSnapshotsForCurrentUser()
         prefs.edit()
             .remove(KEY_TOKEN)
             .remove(KEY_UID)
@@ -54,48 +82,11 @@ class SessionStore(context: Context) {
     }
 
     fun saveChatMessagesSnapshot(chatId: String, messages: List<ChatMessage>) {
-        val uid = prefs.getString(KEY_UID, null) ?: return
-        if (chatId.isBlank()) return
-
-        val cacheKey = "$KEY_CHAT_MESSAGES_CACHE_PREFIX$uid::$chatId"
-        val payload = JSONArray()
-        val filtered = messages.filter { it.id.isNotBlank() }
-        val tail = if (filtered.size > MAX_CHAT_MESSAGES_PER_CHAT_CACHE) {
-            filtered.takeLast(MAX_CHAT_MESSAGES_PER_CHAT_CACHE)
-        } else {
-            filtered
-        }
-        tail.forEach { payload.put(serializeChatMessage(it)) }
-
-        val index = loadChatMessagesIndexRoot().apply {
-            put(cacheKey, System.currentTimeMillis())
-        }
-
-        trimChatMessagesCache(index = index, currentUid = uid)
-
-        prefs.edit()
-            .putString(cacheKey, payload.toString())
-            .putString(KEY_CHAT_MESSAGES_INDEX, index.toString())
-            .apply()
+        messageCacheStore.saveSnapshot(chatId, messages)
     }
 
     fun chatMessagesSnapshot(chatId: String): List<ChatMessage> {
-        val uid = prefs.getString(KEY_UID, null) ?: return emptyList()
-        if (chatId.isBlank()) return emptyList()
-
-        val cacheKey = "$KEY_CHAT_MESSAGES_CACHE_PREFIX$uid::$chatId"
-        val raw = prefs.getString(cacheKey, null).orEmpty()
-        if (raw.isBlank()) return emptyList()
-
-        return runCatching {
-            val array = JSONArray(raw)
-            val result = ArrayList<ChatMessage>(array.length())
-            for (index in 0 until array.length()) {
-                val item = array.optJSONObject(index) ?: continue
-                parseChatMessage(item)?.let { result += it }
-            }
-            result
-        }.getOrDefault(emptyList())
+        return messageCacheStore.snapshot(chatId)
     }
 
     fun saveChatScrollState(
@@ -137,212 +128,92 @@ class SessionStore(context: Context) {
     }
 
     fun setAvailableUpdate(versionCode: Int, versionName: String?) {
-        prefs.edit()
-            .putInt(KEY_AVAILABLE_UPDATE_CODE, versionCode)
-            .putString(KEY_AVAILABLE_UPDATE_NAME, versionName)
-            .apply()
+        updateStore.setAvailableUpdate(versionCode, versionName)
     }
 
-    fun availableUpdateVersionCode(): Int = prefs.getInt(KEY_AVAILABLE_UPDATE_CODE, 0)
+    fun availableUpdateVersionCode(): Int = updateStore.availableUpdateVersionCode()
 
-    fun availableUpdateVersionName(): String? = prefs.getString(KEY_AVAILABLE_UPDATE_NAME, null)
+    fun availableUpdateVersionName(): String? = updateStore.availableUpdateVersionName()
 
     fun clearAvailableUpdate() {
-        prefs.edit()
-            .remove(KEY_AVAILABLE_UPDATE_CODE)
-            .remove(KEY_AVAILABLE_UPDATE_NAME)
-            .apply()
+        updateStore.clearAvailableUpdate()
     }
 
     fun markUpdateSeen(versionCode: Int) {
-        prefs.edit().putInt(KEY_LAST_SEEN_UPDATE_CODE, versionCode).apply()
+        updateStore.markUpdateSeen(versionCode)
     }
 
-    fun lastSeenUpdateCode(): Int = prefs.getInt(KEY_LAST_SEEN_UPDATE_CODE, 0)
+    fun lastSeenUpdateCode(): Int = updateStore.lastSeenUpdateCode()
 
     fun setDownloadedUpdate(versionCode: Int, filePath: String) {
-        prefs.edit()
-            .putInt(KEY_DOWNLOADED_UPDATE_CODE, versionCode)
-            .putString(KEY_DOWNLOADED_UPDATE_PATH, filePath)
-            .apply()
+        updateStore.setDownloadedUpdate(versionCode, filePath)
     }
 
-    fun downloadedUpdateVersionCode(): Int = prefs.getInt(KEY_DOWNLOADED_UPDATE_CODE, 0)
+    fun downloadedUpdateVersionCode(): Int = updateStore.downloadedUpdateVersionCode()
 
-    fun downloadedUpdatePath(): String? = prefs.getString(KEY_DOWNLOADED_UPDATE_PATH, null)
+    fun downloadedUpdatePath(): String? = updateStore.downloadedUpdatePath()
 
     fun clearDownloadedUpdate() {
-        prefs.edit()
-            .remove(KEY_DOWNLOADED_UPDATE_CODE)
-            .remove(KEY_DOWNLOADED_UPDATE_PATH)
-            .apply()
+        updateStore.clearDownloadedUpdate()
     }
 
     fun setUpdatesInfoCache(rawJson: String) {
-        if (rawJson.isBlank()) return
-        prefs.edit().putString(KEY_UPDATES_INFO_CACHE, rawJson).apply()
+        updateStore.setUpdatesInfoCache(rawJson)
     }
 
-    fun updatesInfoCache(): String? = prefs.getString(KEY_UPDATES_INFO_CACHE, null)
+    fun updatesInfoCache(): String? = updateStore.updatesInfoCache()
 
     fun clearUpdatesInfoCache() {
-        prefs.edit().remove(KEY_UPDATES_INFO_CACHE).apply()
+        updateStore.clearUpdatesInfoCache()
     }
 
     fun pinnedChatIds(): Set<String> {
-        return prefs.getStringSet(KEY_PINNED_CHATS, emptySet())?.toSet() ?: emptySet()
+        return visibilityStore.pinnedChatIds()
     }
 
     fun pinnedChatOrder(): List<String> {
-        val pinned = pinnedChatIds()
-        if (pinned.isEmpty()) return emptyList()
-
-        val ordered = linkedSetOf<String>()
-        val raw = prefs.getString(KEY_PINNED_CHATS_ORDER, null).orEmpty()
-        if (raw.isNotBlank()) {
-            runCatching {
-                val json = JSONArray(raw)
-                for (index in 0 until json.length()) {
-                    val id = json.optString(index).trim()
-                    if (id.isNotBlank() && pinned.contains(id)) {
-                        ordered += id
-                    }
-                }
-            }
-        }
-
-        pinned.forEach { id ->
-            if (!ordered.contains(id)) {
-                ordered += id
-            }
-        }
-        return ordered.toList()
+        return visibilityStore.pinnedChatOrder()
     }
 
     fun isChatPinned(chatId: String): Boolean {
-        return pinnedChatIds().contains(chatId)
+        return visibilityStore.isChatPinned(chatId)
     }
 
     fun setChatPinned(chatId: String, pinned: Boolean) {
-        if (chatId.isBlank()) return
-        // Pin set is intentionally unbounded: user can pin any number of chats.
-        val current = linkedSetOf<String>().apply { addAll(pinnedChatIds()) }
-        val order = pinnedChatOrder().toMutableList()
-        if (pinned) {
-            current += chatId
-            if (!order.contains(chatId)) {
-                order += chatId
-            }
-        } else {
-            current -= chatId
-            order.removeAll { it == chatId }
-        }
-        prefs.edit()
-            .putStringSet(KEY_PINNED_CHATS, current)
-            .putString(KEY_PINNED_CHATS_ORDER, JSONArray(order).toString())
-            .apply()
+        visibilityStore.setChatPinned(chatId, pinned)
     }
 
     fun hiddenChatIds(): Set<String> {
-        val uid = prefs.getString(KEY_UID, null) ?: return emptySet()
-        val prefix = "$uid::"
-        return prefs.getStringSet(KEY_HIDDEN_CHATS, emptySet())
-            ?.mapNotNull { value ->
-                if (value.startsWith(prefix)) value.removePrefix(prefix) else null
-            }
-            ?.toSet()
-            ?: emptySet()
+        return visibilityStore.hiddenChatIds()
     }
 
     fun hideChat(chatId: String) {
-        val uid = prefs.getString(KEY_UID, null) ?: return
-        if (chatId.isBlank()) return
-        val key = "$uid::$chatId"
-        val current = linkedSetOf<String>().apply {
-            addAll(prefs.getStringSet(KEY_HIDDEN_CHATS, emptySet()) ?: emptySet())
-        }
-        current += key
-        prefs.edit().putStringSet(KEY_HIDDEN_CHATS, current).apply()
+        visibilityStore.hideChat(chatId)
     }
 
     fun hiddenMessageIds(chatId: String): Set<String> {
-        val uid = prefs.getString(KEY_UID, null) ?: return emptySet()
-        if (chatId.isBlank()) return emptySet()
-        val prefix = "$uid::$chatId::"
-        return prefs.getStringSet(KEY_HIDDEN_MESSAGES, emptySet())
-            ?.mapNotNull { value ->
-                if (value.startsWith(prefix)) value.removePrefix(prefix) else null
-            }
-            ?.toSet()
-            ?: emptySet()
+        return visibilityStore.hiddenMessageIds(chatId)
     }
 
     fun hideMessage(chatId: String, messageId: String) {
-        val uid = prefs.getString(KEY_UID, null) ?: return
-        if (chatId.isBlank() || messageId.isBlank()) return
-        val key = "$uid::$chatId::$messageId"
-        val current = linkedSetOf<String>().apply {
-            addAll(prefs.getStringSet(KEY_HIDDEN_MESSAGES, emptySet()) ?: emptySet())
-        }
-        current += key
-        prefs.edit().putStringSet(KEY_HIDDEN_MESSAGES, current).apply()
+        visibilityStore.hideMessage(chatId, messageId)
     }
 
     fun removeHiddenMessage(chatId: String, messageId: String) {
-        val uid = prefs.getString(KEY_UID, null) ?: return
-        if (chatId.isBlank() || messageId.isBlank()) return
-        val key = "$uid::$chatId::$messageId"
-        val current = linkedSetOf<String>().apply {
-            addAll(prefs.getStringSet(KEY_HIDDEN_MESSAGES, emptySet()) ?: emptySet())
-        }
-        if (current.remove(key)) {
-            prefs.edit().putStringSet(KEY_HIDDEN_MESSAGES, current).apply()
-        }
+        visibilityStore.removeHiddenMessage(chatId, messageId)
     }
 
     fun rememberedAccounts(): List<RememberedAccount> {
-        val raw = prefs.getString(KEY_REMEMBERED_ACCOUNTS_JSON, null) ?: return emptyList()
-        return runCatching {
-            val json = JSONArray(raw)
-            val result = ArrayList<RememberedAccount>(json.length())
-            for (index in 0 until json.length()) {
-                val item = json.optJSONObject(index) ?: continue
-                val token = item.optString("token").trim()
-                val uid = item.optString("uid").trim()
-                val login = item.optString("login").trim()
-                val displayName = item.optString("displayName").ifBlank { login }
-                val serverUrl = item.optString("serverUrl").trim()
-                if (token.isBlank() || uid.isBlank() || login.isBlank() || serverUrl.isBlank()) {
-                    continue
-                }
-                val avatarUrl = item.optString("avatarUrl").ifBlank { null }
-                result += RememberedAccount(
-                    uid = uid,
-                    login = login,
-                    displayName = displayName,
-                    avatarUrl = avatarUrl,
-                    token = token,
-                    serverUrl = serverUrl
-                )
-            }
-            result
-        }.getOrDefault(emptyList())
+        return rememberedAccountsStore.accounts()
     }
 
     fun rememberedAccountsForServer(serverUrl: String): List<RememberedAccount> {
-        val normalizedServer = normalizeServerUrl(serverUrl)
-        return rememberedAccounts()
-            .filter { normalizeServerUrl(it.serverUrl) == normalizedServer }
-            .sortedBy { it.displayName.lowercase() }
+        return rememberedAccountsStore.accountsForServer(serverUrl)
     }
 
     fun restoreRememberedAccount(login: String, serverUrl: String): Boolean {
-        val safeLogin = login.trim().lowercase()
         val normalizedServer = normalizeServerUrl(serverUrl)
-        val account = rememberedAccounts().firstOrNull {
-            it.login.equals(safeLogin, ignoreCase = true) &&
-                normalizeServerUrl(it.serverUrl) == normalizedServer
-        } ?: return false
+        val account = rememberedAccountsStore.findAccount(login, serverUrl) ?: return false
 
         prefs.edit()
             .putString(KEY_SERVER_URL, normalizedServer)
@@ -356,13 +227,7 @@ class SessionStore(context: Context) {
     }
 
     fun removeRememberedAccount(login: String, serverUrl: String) {
-        val safeLogin = login.trim().lowercase()
-        val normalizedServer = normalizeServerUrl(serverUrl)
-        val updated = rememberedAccounts().filterNot {
-            it.login.equals(safeLogin, ignoreCase = true) &&
-                normalizeServerUrl(it.serverUrl) == normalizedServer
-        }
-        saveRememberedAccounts(updated)
+        rememberedAccountsStore.removeAccount(login, serverUrl)
     }
 
     fun currentUser(): UserProfile? {
@@ -408,203 +273,6 @@ class SessionStore(context: Context) {
         return runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
     }
 
-    private fun loadChatMessagesIndexRoot(): JSONObject {
-        val raw = prefs.getString(KEY_CHAT_MESSAGES_INDEX, null).orEmpty()
-        if (raw.isBlank()) return JSONObject()
-        return runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
-    }
-
-    private fun trimChatMessagesCache(index: JSONObject, currentUid: String) {
-        val prefix = "$KEY_CHAT_MESSAGES_CACHE_PREFIX$currentUid::"
-        val cacheItems = mutableListOf<Pair<String, Long>>()
-        val keys = index.keys()
-        while (keys.hasNext()) {
-            val key = keys.next()
-            if (!key.startsWith(prefix)) continue
-            val updatedAt = runCatching { index.optLong(key, 0L) }.getOrDefault(0L)
-            cacheItems += key to updatedAt
-        }
-        if (cacheItems.size <= MAX_CACHED_CHATS_WITH_MESSAGES) return
-
-        val toRemove = cacheItems
-            .sortedBy { it.second }
-            .take(cacheItems.size - MAX_CACHED_CHATS_WITH_MESSAGES)
-            .map { it.first }
-        val editor = prefs.edit()
-        toRemove.forEach { key ->
-            editor.remove(key)
-            index.remove(key)
-        }
-        editor.putString(KEY_CHAT_MESSAGES_INDEX, index.toString()).apply()
-    }
-
-    private fun clearChatMessageSnapshotsForCurrentUser() {
-        val uid = prefs.getString(KEY_UID, null) ?: return
-        val prefix = "$KEY_CHAT_MESSAGES_CACHE_PREFIX$uid::"
-        val index = loadChatMessagesIndexRoot()
-        val keysToRemove = mutableListOf<String>()
-        val keys = index.keys()
-        while (keys.hasNext()) {
-            val key = keys.next()
-            if (key.startsWith(prefix)) {
-                keysToRemove += key
-            }
-        }
-        if (keysToRemove.isEmpty()) return
-
-        val editor = prefs.edit()
-        keysToRemove.forEach { key ->
-            editor.remove(key)
-            index.remove(key)
-        }
-        editor.putString(KEY_CHAT_MESSAGES_INDEX, index.toString()).apply()
-    }
-
-    private fun serializeChatMessage(message: ChatMessage): JSONObject {
-        val deliveredBy = JSONArray().apply {
-            message.deliveredBy
-                .asSequence()
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .forEach { put(it) }
-        }
-        val readBy = JSONArray().apply {
-            message.readBy
-                .asSequence()
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .forEach { put(it) }
-        }
-        return JSONObject()
-            .put("id", message.id)
-            .put("senderId", message.senderId)
-            .put("senderName", message.senderName)
-            .put("senderAvatarUrl", message.senderAvatarUrl)
-            .put("text", message.text)
-            .put("type", message.type.name.lowercase())
-            .put("voiceUrl", message.voiceUrl)
-            .put("voiceDurationSec", message.voiceDurationSec)
-            .put("imageUrl", message.imageUrl)
-            .put("imageWidth", message.imageWidth)
-            .put("imageHeight", message.imageHeight)
-            .put("imageUrls", JSONArray().apply {
-                message.imageUrls
-                    .asSequence()
-                    .map { it.trim() }
-                    .filter { it.isNotBlank() }
-                    .forEach { put(it) }
-            })
-            .put("imageWidths", JSONArray().apply {
-                message.imageWidths.forEach { put(it.coerceAtLeast(0)) }
-            })
-            .put("imageHeights", JSONArray().apply {
-                message.imageHeights.forEach { put(it.coerceAtLeast(0)) }
-            })
-            .put("videoUrl", message.videoUrl)
-            .put("videoDurationSec", message.videoDurationSec)
-            .put("replyToMessageId", message.replyToMessageId)
-            .put("replyToSenderName", message.replyToSenderName)
-            .put("replyToText", message.replyToText)
-            .put("replyToImageUrl", message.replyToImageUrl)
-            .put("timestamp", message.timestamp)
-            .put("deliveredBy", deliveredBy)
-            .put("readBy", readBy)
-            .put("edited", message.edited)
-    }
-
-    private fun parseChatMessage(raw: JSONObject): ChatMessage? {
-        val id = raw.optString("id").trim()
-        if (id.isBlank()) return null
-
-        val deliveredBy = mutableListOf<String>()
-        val deliveredByRaw = raw.optJSONArray("deliveredBy")
-        if (deliveredByRaw != null) {
-            for (index in 0 until deliveredByRaw.length()) {
-                val value = deliveredByRaw.optString(index).trim()
-                if (value.isNotBlank()) {
-                    deliveredBy += value
-                }
-            }
-        }
-
-        val readBy = mutableListOf<String>()
-        val readByRaw = raw.optJSONArray("readBy")
-        if (readByRaw != null) {
-            for (index in 0 until readByRaw.length()) {
-                val value = readByRaw.optString(index).trim()
-                if (value.isNotBlank()) {
-                    readBy += value
-                }
-            }
-        }
-
-        val type = when (raw.optString("type").trim().lowercase()) {
-            "voice" -> MessageType.VOICE
-            "image" -> MessageType.IMAGE
-            "video" -> MessageType.VIDEO
-            else -> MessageType.TEXT
-        }
-
-        val imageUrls = mutableListOf<String>()
-        val imageUrlsRaw = raw.optJSONArray("imageUrls")
-        if (imageUrlsRaw != null) {
-            for (index in 0 until imageUrlsRaw.length()) {
-                val value = imageUrlsRaw.optString(index).trim()
-                if (value.isNotBlank()) {
-                    imageUrls += value
-                }
-            }
-        } else {
-            val fallbackImageUrl = raw.optString("imageUrl").trim()
-            if (fallbackImageUrl.isNotBlank()) {
-                imageUrls += fallbackImageUrl
-            }
-        }
-        val imageWidths = parseIntList(raw.optJSONArray("imageWidths")).ifEmpty {
-            raw.optInt("imageWidth", 0).coerceAtLeast(0).takeIf { it > 0 }?.let { listOf(it) }.orEmpty()
-        }
-        val imageHeights = parseIntList(raw.optJSONArray("imageHeights")).ifEmpty {
-            raw.optInt("imageHeight", 0).coerceAtLeast(0).takeIf { it > 0 }?.let { listOf(it) }.orEmpty()
-        }
-
-        return ChatMessage(
-            id = id,
-            senderId = raw.optString("senderId"),
-            senderName = raw.optString("senderName"),
-            senderAvatarUrl = raw.optCleanString("senderAvatarUrl"),
-            text = raw.optString("text"),
-            type = type,
-            voiceUrl = raw.optCleanString("voiceUrl"),
-            voiceDurationSec = raw.optInt("voiceDurationSec", 0).coerceAtLeast(0),
-            imageUrl = raw.optCleanString("imageUrl"),
-            imageWidth = raw.optInt("imageWidth", 0).coerceAtLeast(0),
-            imageHeight = raw.optInt("imageHeight", 0).coerceAtLeast(0),
-            imageUrls = imageUrls,
-            imageWidths = imageWidths,
-            imageHeights = imageHeights,
-            videoUrl = raw.optCleanString("videoUrl"),
-            videoDurationSec = raw.optInt("videoDurationSec", 0).coerceAtLeast(0),
-            replyToMessageId = raw.optString("replyToMessageId").ifBlank { null },
-            replyToSenderName = raw.optString("replyToSenderName").ifBlank { null },
-            replyToText = raw.optString("replyToText").ifBlank { null },
-            replyToImageUrl = raw.optCleanString("replyToImageUrl"),
-            timestamp = raw.optLong("timestamp", 0L),
-            deliveredBy = deliveredBy,
-            readBy = readBy,
-            edited = raw.optBoolean("edited", false),
-            sendState = MessageSendState.SENT
-        )
-    }
-
-    private fun parseIntList(raw: JSONArray?): List<Int> {
-        if (raw == null) return emptyList()
-        val values = ArrayList<Int>(raw.length())
-        for (index in 0 until raw.length()) {
-            values += raw.optInt(index, 0).coerceAtLeast(0)
-        }
-        return values
-    }
-
     private companion object {
         const val PREFS_NAME = "reserv_session"
         const val KEY_SERVER_URL = "server_url"
@@ -634,43 +302,6 @@ class SessionStore(context: Context) {
         const val MAX_CACHED_CHATS_WITH_MESSAGES = 16
     }
 
-    private fun saveRememberedAccount(token: String, user: UserProfile, serverUrl: String) {
-        val safeToken = token.trim()
-        if (safeToken.isBlank()) return
-        val safeServer = normalizeServerUrl(serverUrl)
-
-        val current = rememberedAccounts().toMutableList()
-        current.removeAll {
-            it.login.equals(user.login, ignoreCase = true) &&
-                normalizeServerUrl(it.serverUrl) == safeServer
-        }
-        current += RememberedAccount(
-            uid = user.uid,
-            login = user.login.lowercase(),
-            displayName = user.displayName.ifBlank { user.login },
-            avatarUrl = user.avatarUrl,
-            token = safeToken,
-            serverUrl = safeServer
-        )
-        saveRememberedAccounts(current)
-    }
-
-    private fun saveRememberedAccounts(items: List<RememberedAccount>) {
-        val json = JSONArray()
-        items.forEach { account ->
-            json.put(
-                JSONObject()
-                    .put("uid", account.uid)
-                    .put("login", account.login)
-                    .put("displayName", account.displayName)
-                    .put("avatarUrl", account.avatarUrl)
-                    .put("token", account.token)
-                    .put("serverUrl", account.serverUrl)
-            )
-        }
-        prefs.edit().putString(KEY_REMEMBERED_ACCOUNTS_JSON, json.toString()).apply()
-    }
-
     data class RememberedAccount(
         val uid: String,
         val login: String,
@@ -686,9 +317,4 @@ class SessionStore(context: Context) {
         val anchorOffsetPx: Int,
         val wasAtBottom: Boolean
     )
-}
-
-private fun JSONObject.optCleanString(name: String): String? {
-    if (isNull(name)) return null
-    return optString(name).trim().takeUnless { it.isBlank() || it.equals("null", ignoreCase = true) }
 }

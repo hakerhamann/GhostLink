@@ -1,18 +1,10 @@
 ﻿package com.rezerv.app.chat
 
 import android.Manifest
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
-import android.animation.ValueAnimator
-import android.annotation.SuppressLint
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Rect
-import android.media.MediaRecorder
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -20,45 +12,27 @@ import android.text.InputType
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
-import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.ImageView
-import android.widget.PopupMenu
 import android.widget.LinearLayout
 import android.widget.Toast
 import android.widget.TextView
 import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.video.FileOutputOptions
-import androidx.camera.video.Quality
-import androidx.camera.video.QualitySelector
-import androidx.camera.video.Recorder
-import androidx.camera.video.Recording
-import androidx.camera.video.VideoCapture
-import androidx.camera.video.VideoRecordEvent
-import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
-import androidx.core.view.updatePadding
 import androidx.core.widget.addTextChangedListener
 import androidx.interpolator.view.animation.FastOutSlowInInterpolator
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
-import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.tabs.TabLayout
-import com.google.common.util.concurrent.ListenableFuture
 import com.rezerv.app.AppContainer
 import com.rezerv.app.R
 import com.rezerv.app.auth.LoginActivity
@@ -74,8 +48,8 @@ import com.rezerv.app.notifications.MessageNotificationHelper
 import com.rezerv.app.chat.PhotoPreviewActivity
 import com.rezerv.app.profile.AvatarPreviewActivity
 import com.rezerv.app.profile.UserProfileActivity
-import com.rezerv.app.ui.adapters.EmojiAdapter
 import com.rezerv.app.ui.adapters.MessageAdapter
+import com.rezerv.app.ui.dialog.ActionSheetDialog
 import com.rezerv.app.util.AvatarLoader
 import com.rezerv.app.util.AvatarProcessor
 import com.rezerv.app.util.ImageThumbnailLoader
@@ -93,20 +67,14 @@ class ChatActivity : AppCompatActivity() {
     private var messagesListener: RealtimeSubscription? = null
     private var currentUser: UserProfile? = null
     private var adapter: MessageAdapter? = null
-    private lateinit var emojiAdapter: EmojiAdapter
-    private var emojiCategories: List<TelegramEmojiCatalog.Category> = emptyList()
-    private var lastKnownKeyboardHeightPx: Int = 0
-    private var composerInsetReservePx: Int = 0
-    private var pendingKeyboardShowTransition: Boolean = false
-    private var pendingEmojiShowTransition: Boolean = false
-    private var inputBarBaseBottomPaddingPx: Int = 0
-    private var appliedInputBarInsetPx: Int = 0
-    private var targetInputBarInsetPx: Int = 0
+    private lateinit var emojiKeyboardController: ChatEmojiKeyboardController
+    private lateinit var viewportController: ChatViewportController
+    private lateinit var replyController: ChatReplyController
+    private lateinit var optimisticMessageStore: ChatOptimisticMessageStore
+    private lateinit var inlineEditController: ChatInlineEditController
+    private lateinit var recordingController: ChatRecordingController
 
     private var latestMessages: List<ChatMessage> = emptyList()
-    private val localOverlayMessages = mutableListOf<ChatMessage>()
-    private val localToServerMessageIds = mutableMapOf<String, String>()
-    private var localMessageSequence: Long = 0L
     private var hiddenMessageIds: Set<String> = emptySet()
     private var forceScrollToBottomOnNextUpdate: Boolean = false
     private var userManuallyScrolledAwayFromBottom: Boolean = false
@@ -114,61 +82,14 @@ class ChatActivity : AppCompatActivity() {
     private var readMarkInFlightUpToTimestampMs: Long? = null
     private var pendingOpenAtFirstUnread: Boolean = false
     private var swipeToReplyHelper: ItemTouchHelper? = null
-    private var replyTargetMessage: ChatMessage? = null
     private var cachedGroupInfo: GroupInfo? = null
     private var keepViewportStableOnUpdates: Boolean = false
     private var lockedViewportAnchor: ViewportAnchor? = null
     private var isApplyingViewportAnchor: Boolean = false
-    private var currentRecordMode: RecordMode = RecordMode.VOICE
-    private var pendingPermissionRecordingType: RecordingType? = null
-    private var voiceButtonPressed: Boolean = false
-    private var longPressTriggered: Boolean = false
-    private var voiceTouchDownX: Float = 0f
-    private var voiceTouchDownY: Float = 0f
-    private val voiceButtonLongPressHandler = Handler(Looper.getMainLooper())
-    private var voiceRecorder: MediaRecorder? = null
-    private var voiceRecordFile: File? = null
-    private var recordingStartedAtMs: Long = 0L
-    private var isVoiceRecording: Boolean = false
-    private var cameraProviderFuture: ListenableFuture<ProcessCameraProvider>? = null
-    private var cameraProvider: ProcessCameraProvider? = null
-    private var videoPreviewUseCase: Preview? = null
-    private var videoCapture: VideoCapture<Recorder>? = null
-    private var videoRecording: Recording? = null
-    private var videoRecordFile: File? = null
-    private var videoCameraFacing: Int = CameraSelector.LENS_FACING_FRONT
-    private var isVideoRecording: Boolean = false
-    private var pendingVideoSendAfterStop: Boolean = false
-    private var pendingCameraSwitchAfterFinalize: Boolean = false
     private var replySwipeTriggeredInGesture: Boolean = false
-    private val recordingUiHandler = Handler(Looper.getMainLooper())
     private val loadingIndicatorHandler = Handler(Looper.getMainLooper())
     private val emojiTransitionHandler = Handler(Looper.getMainLooper())
-    private var keyboardInsetAnimator: ValueAnimator? = null
-    private var emojiPanelHeightAnimator: ValueAnimator? = null
     private var pendingLoadingIndicatorRunnable: Runnable? = null
-    private var pendingEmojiOpenFallbackRunnable: Runnable? = null
-    private var pendingKeyboardHideEmojiFallbackRunnable: Runnable? = null
-    private val voiceLongPressRunnable = Runnable {
-        if (!voiceButtonPressed || longPressTriggered || isAnyRecordingInProgress()) return@Runnable
-        longPressTriggered = true
-        when (currentRecordMode) {
-            RecordMode.VOICE -> ensureAudioPermissionAndRecord()
-            RecordMode.VIDEO -> ensureVideoPermissionsAndRecord()
-        }
-    }
-    private val recordingTicker = object : Runnable {
-        override fun run() {
-            if (!isAnyRecordingInProgress()) return
-            val elapsedSec = ((System.currentTimeMillis() - recordingStartedAtMs) / 1000L).toInt().coerceAtLeast(0)
-            if (isVideoRecording && elapsedSec >= MAX_VIDEO_RECORD_DURATION_SEC) {
-                stopVideoRecording(send = true)
-                return
-            }
-            updateRecordingUi(recording = true, elapsedSec = elapsedSec)
-            recordingUiHandler.postDelayed(this, 1000L)
-        }
-    }
 
     private val chatId: String by lazy {
         intent.getStringExtra(EXTRA_CHAT_ID).orEmpty()
@@ -209,10 +130,7 @@ class ChatActivity : AppCompatActivity() {
     private var swipeBackHandled: Boolean = false
     private var swipeBackDragging: Boolean = false
     private val selectedPhotoUris = mutableListOf<Uri>()
-    private val removedEditedPhotoUrls = mutableSetOf<String>()
-    private val pendingEditedMessages = mutableMapOf<String, PendingEditedMessage>()
     private var pendingPhotoSelectionTarget: PhotoSelectionTarget = PhotoSelectionTarget.COMPOSE
-    private var inlineEditState: InlineEditState? = null
 
     private val pickGroupAvatar = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) uploadGroupAvatar(uri)
@@ -231,31 +149,15 @@ class ChatActivity : AppCompatActivity() {
     private val recordAudioPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        val pendingType = pendingPermissionRecordingType
-        pendingPermissionRecordingType = null
-        if (!granted) {
-            Toast.makeText(this, "Нужно разрешение на микрофон", Toast.LENGTH_SHORT).show()
-            return@registerForActivityResult
-        }
-        if (pendingType == RecordingType.VOICE && voiceButtonPressed) {
-            startVoiceRecordingInternal()
-        }
+        recordingController.handleAudioPermissionResult(granted)
     }
 
     private val videoPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val pendingType = pendingPermissionRecordingType
-        pendingPermissionRecordingType = null
         val cameraGranted = permissions[Manifest.permission.CAMERA] == true
         val audioGranted = permissions[Manifest.permission.RECORD_AUDIO] == true
-        if (!cameraGranted || !audioGranted) {
-            Toast.makeText(this, "Нужны разрешения на камеру и микрофон", Toast.LENGTH_SHORT).show()
-            return@registerForActivityResult
-        }
-        if (pendingType == RecordingType.VIDEO && voiceButtonPressed) {
-            startVideoRecordingInternal()
-        }
+        recordingController.handleVideoPermissionsResult(cameraGranted, audioGranted)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -268,88 +170,69 @@ class ChatActivity : AppCompatActivity() {
         binding = ActivityChatBinding.inflate(layoutInflater)
         setContentView(binding.root)
         swipeBackTouchSlopPx = ViewConfiguration.get(this).scaledTouchSlop.toFloat().coerceAtLeast(1f)
+        emojiKeyboardController = ChatEmojiKeyboardController(
+            activity = this,
+            binding = binding,
+            transitionHandler = emojiTransitionHandler
+        )
+        viewportController = ChatViewportController(
+            binding = binding,
+            sessionStore = AppContainer.sessionStore,
+            chatId = chatId,
+            messagesProvider = { adapter?.currentList.orEmpty() }
+        )
+        replyController = ChatReplyController(
+            context = this,
+            binding = binding,
+            adapterProvider = { adapter },
+            messagesProvider = { adapter?.currentList.orEmpty() },
+            isEditingMessage = ::isEditingMessage,
+            cancelInlineEdit = ::cancelInlineEdit,
+            isEmojiPanelActiveOrPending = ::isEmojiPanelActiveOrPending,
+            showKeyboard = ::showKeyboard,
+            resolveServerMessageId = ::resolveServerMessageId,
+            resolveMessagePhotoUrls = ::resolveMessagePhotoUrls,
+            dpToPx = ::dpToPx
+        )
+        optimisticMessageStore = ChatOptimisticMessageStore(
+            replyPreviewText = ::replyPreviewText,
+            replyPreviewImageUrl = ::replyPreviewImageUrl,
+            resolveMessagePhotoUrls = ::resolveMessagePhotoUrls
+        )
+        inlineEditController = ChatInlineEditController(
+            binding = binding,
+            selectedPhotoUris = selectedPhotoUris,
+            resolveMessagePhotoUrls = ::resolveMessagePhotoUrls,
+            clearReplyTarget = ::clearReplyTarget,
+            hideEmojiPanelForKeyboard = { hideEmojiPanel(showKeyboard = true) },
+            showKeyboard = ::showKeyboard,
+            updatePhotoDraftUi = ::updatePhotoDraftUi,
+            updateComposerActionState = ::updateComposerActionState
+        )
+        recordingController = ChatRecordingController(
+            activity = this,
+            binding = binding,
+            requestAudioPermission = { recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+            requestVideoPermissions = {
+                videoPermissionsLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.CAMERA,
+                        Manifest.permission.RECORD_AUDIO
+                    )
+                )
+            },
+            hideEmojiPanel = { hideEmojiPanel(showKeyboard = false) },
+            updateComposerActionState = ::updateComposerActionState,
+            sendVoice = ::uploadAndSendVoice,
+            sendVideo = ::uploadAndSendVideo
+        )
         restoreLastKeyboardHeight()
         currentRecipientsCount = initialRecipientsCount
         pendingOpenAtFirstUnread = initialUnreadCount > 0
 
         val baseTopPadding = binding.topBar.paddingTop
         val baseInputBottomPadding = binding.inputBar.paddingBottom
-        inputBarBaseBottomPaddingPx = baseInputBottomPadding
-        appliedInputBarInsetPx = 0
-        targetInputBarInsetPx = 0
-        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-            val keyboardHeight = (ime.bottom - bars.bottom).coerceAtLeast(0)
-            val keyboardVisible = keyboardHeight > 0
-            val keyboardTrackedVisible = keyboardHeight >= MIN_KEYBOARD_HEIGHT_TRACK_PX
-            if (keyboardTrackedVisible && keyboardHeight != lastKnownKeyboardHeightPx) {
-                lastKnownKeyboardHeightPx = keyboardHeight
-                persistKeyboardHeight(keyboardHeight)
-                applyEmojiPanelHeight()
-            }
-            if (pendingKeyboardShowTransition) {
-                if (binding.emojiContainer.isVisible && composerInsetReservePx > 0) {
-                    val collapseHeight = (composerInsetReservePx - keyboardHeight)
-                        .coerceIn(0, composerInsetReservePx)
-                    applyEmojiPanelHeight(collapseHeight)
-                }
-                val completionThresholdPx = (composerInsetReservePx - dpToPx(KEYBOARD_TRANSITION_COMPLETION_GAP_DP))
-                    .coerceAtLeast(MIN_KEYBOARD_HEIGHT_TRACK_PX)
-                if (keyboardVisible && keyboardHeight >= completionThresholdPx) {
-                    finalizePendingKeyboardShowTransition()
-                }
-            }
-            if (pendingEmojiShowTransition) {
-                if (!keyboardVisible) {
-                    val currentPanelHeight = (binding.emojiContainer.layoutParams?.height ?: 0).coerceAtLeast(0)
-                    val targetPanelHeight = resolveEmojiPanelHeightPx()
-                    pendingEmojiShowTransition = false
-                    composerInsetReservePx = 0
-                    if (currentPanelHeight != targetPanelHeight) {
-                        animateEmojiPanelHeight(
-                            fromHeight = currentPanelHeight,
-                            toHeight = targetPanelHeight
-                        )
-                    } else {
-                        applyEmojiPanelHeight(targetPanelHeight)
-                    }
-                    binding.emojiContainer.isVisible = true
-                    cancelPendingEmojiOpenFallback()
-                } else if (composerInsetReservePx > 0) {
-                    val expandHeight = (composerInsetReservePx - keyboardHeight)
-                        .coerceIn(0, composerInsetReservePx)
-                    applyEmojiPanelHeight(expandHeight)
-                }
-            }
-            if (
-                keyboardVisible &&
-                binding.emojiContainer.isVisible &&
-                binding.etMessage.hasFocus() &&
-                !pendingEmojiShowTransition &&
-                !pendingKeyboardShowTransition
-            ) {
-                binding.emojiContainer.isVisible = false
-                pendingKeyboardShowTransition = false
-                composerInsetReservePx = 0
-                applyEmojiPanelHeight()
-            }
-            syncEmojiToggleIcon()
-            binding.topBar.updatePadding(top = baseTopPadding + bars.top)
-            val bottomInset = when {
-                pendingKeyboardShowTransition -> bars.bottom + keyboardHeight
-                keyboardVisible -> bars.bottom + keyboardHeight
-                binding.emojiContainer.isVisible -> bars.bottom
-                composerInsetReservePx > 0 -> bars.bottom + composerInsetReservePx
-                else -> bars.bottom
-            }
-            val smoothKeyboardOnly =
-                !pendingKeyboardShowTransition &&
-                    !pendingEmojiShowTransition &&
-                    composerInsetReservePx == 0
-            applyInputBarBottomInset(bottomInset, animate = smoothKeyboardOnly)
-            insets
-        }
+        emojiKeyboardController.installWindowInsets(baseTopPadding, baseInputBottomPadding)
 
         binding.tvChatTitle.text = chatTitle
         bindChatHeaderAvatar(
@@ -370,7 +253,7 @@ class ChatActivity : AppCompatActivity() {
         binding.ivChatAvatar.setOnClickListener { openChatHeaderAvatarTarget() }
         binding.tvChatAvatarFallback.setOnClickListener { openChatHeaderAvatarTarget() }
         binding.btnBack.setOnClickListener { finishChatWithBackAnimation() }
-        binding.btnChatMenu.setOnClickListener { anchor -> showChatMenu(anchor) }
+        binding.btnChatMenu.setOnClickListener { showChatMenu(binding.btnChatMenu) }
         binding.btnSend.setOnClickListener { sendMessage() }
         binding.btnScrollToBottom.setOnClickListener { scrollToBottom(animated = true) }
         binding.btnAttach.setOnClickListener {
@@ -456,14 +339,10 @@ class ChatActivity : AppCompatActivity() {
         swipeToReplyHelper?.attachToRecyclerView(null)
         swipeToReplyHelper = null
         adapter?.releaseVoicePlayback()
-        recordingUiHandler.removeCallbacksAndMessages(null)
-        voiceButtonLongPressHandler.removeCallbacksAndMessages(null)
-        cancelPendingEmojiOpenFallback()
-        cancelPendingKeyboardHideEmojiFallback()
-        cancelEmojiPanelHeightAnimation()
-        emojiTransitionHandler.removeCallbacksAndMessages(null)
-        stopAnyActiveRecording(send = false)
-        releaseVideoCapture()
+        emojiKeyboardController.destroy()
+        if (::recordingController.isInitialized) {
+            recordingController.release()
+        }
         super.onDestroy()
     }
 
@@ -516,12 +395,7 @@ class ChatActivity : AppCompatActivity() {
                         if (dx > swipeBackTouchSlopPx && dx > dy * 1.05f) {
                             swipeBackDragging = true
                             swipeBackHandled = true
-                            pendingKeyboardShowTransition = false
-                            pendingEmojiShowTransition = false
-                            composerInsetReservePx = 0
-                            binding.etMessage.clearFocus()
-                            hideKeyboard()
-                            ViewCompat.requestApplyInsets(binding.root)
+                            emojiKeyboardController.resetForSwipeBack()
                         } else if (dy > swipeBackTouchSlopPx && dy > dx) {
                             swipeBackArmed = false
                         }
@@ -764,139 +638,27 @@ class ChatActivity : AppCompatActivity() {
     private fun hasAnyMessagesToShow(): Boolean {
         return (adapter?.itemCount ?: 0) > 0 ||
             latestMessages.isNotEmpty() ||
-            localOverlayMessages.isNotEmpty()
+            optimisticMessageStore.hasOverlayMessages()
     }
 
     private fun mergeMessagesForDisplay(serverMessages: List<ChatMessage> = latestMessages): List<ChatMessage> {
-        val mergedBase = if (localOverlayMessages.isEmpty()) {
-            serverMessages
-        } else {
-            val mappedServerIds = localToServerMessageIds.values
-                .asSequence()
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .toHashSet()
-            val filteredServerMessages = if (mappedServerIds.isEmpty()) {
-                serverMessages
-            } else {
-                serverMessages.filterNot { it.id in mappedServerIds }
-            }
-            val serverIds = filteredServerMessages.mapTo(hashSetOf()) { it.id }
-            val overlay = localOverlayMessages
-                .asSequence()
-                .filter { it.id !in serverIds }
-                .sortedBy { it.timestamp }
-                .toList()
-            if (overlay.isEmpty()) {
-                filteredServerMessages
-            } else if (filteredServerMessages.isEmpty()) {
-                overlay
-            } else {
-                val merged = ArrayList<ChatMessage>(filteredServerMessages.size + overlay.size)
-                var serverIndex = 0
-                var overlayIndex = 0
-                while (serverIndex < filteredServerMessages.size && overlayIndex < overlay.size) {
-                    val serverMessage = filteredServerMessages[serverIndex]
-                    val overlayMessage = overlay[overlayIndex]
-                    val takeServerMessage = if (serverMessage.timestamp != overlayMessage.timestamp) {
-                        serverMessage.timestamp <= overlayMessage.timestamp
-                    } else {
-                        true
-                    }
-                    if (takeServerMessage) {
-                        merged += serverMessage
-                        serverIndex += 1
-                    } else {
-                        merged += overlayMessage
-                        overlayIndex += 1
-                    }
-                }
-                while (serverIndex < filteredServerMessages.size) {
-                    merged += filteredServerMessages[serverIndex++]
-                }
-                while (overlayIndex < overlay.size) {
-                    merged += overlay[overlayIndex++]
-                }
-                merged
-            }
-        }
-        return applyPendingEditedMessages(mergedBase)
-    }
-
-    private fun applyPendingEditedMessages(messages: List<ChatMessage>): List<ChatMessage> {
-        if (pendingEditedMessages.isEmpty()) return messages
-        return messages.map { current ->
-            val pendingEntry = pendingEditedMessages.entries.firstOrNull { (_, pending) ->
-                current.id == pending.replacement.id || current.id == pending.serverMessageId
-            } ?: return@map current
-            pendingEntry.value.replacement.copy(id = current.id, sendState = current.sendState)
-        }
+        return optimisticMessageStore.mergeMessagesForDisplay(serverMessages)
     }
 
     private fun pruneEditedMessages(serverMessages: List<ChatMessage>) {
-        if (pendingEditedMessages.isEmpty()) return
-        val serverById = serverMessages.associateBy { it.id }
-        val iterator = pendingEditedMessages.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            val pending = entry.value
-            val serverMessage = serverById[pending.serverMessageId] ?: serverById[pending.replacement.id] ?: continue
-            if (messagesMatchForEdit(serverMessage, pending.replacement)) {
-                iterator.remove()
-            }
-        }
-    }
-
-    private fun messagesMatchForEdit(first: ChatMessage, second: ChatMessage): Boolean {
-        return first.type == second.type &&
-            first.text == second.text &&
-            first.voiceUrl == second.voiceUrl &&
-            first.voiceDurationSec == second.voiceDurationSec &&
-            first.imageUrl == second.imageUrl &&
-            first.imageUrls == second.imageUrls &&
-            first.imageWidth == second.imageWidth &&
-            first.imageHeight == second.imageHeight &&
-            first.imageWidths == second.imageWidths &&
-            first.imageHeights == second.imageHeights &&
-            first.videoUrl == second.videoUrl &&
-            first.videoDurationSec == second.videoDurationSec &&
-            first.replyToMessageId == second.replyToMessageId &&
-            first.replyToSenderName == second.replyToSenderName &&
-            first.replyToText == second.replyToText &&
-            first.replyToImageUrl == second.replyToImageUrl &&
-            first.edited == second.edited
+        optimisticMessageStore.pruneEditedMessages(serverMessages)
     }
 
     private fun pruneOverlayMessages(serverMessages: List<ChatMessage>) {
-        if (localOverlayMessages.isEmpty()) return
-        val serverIds = serverMessages.mapTo(hashSetOf()) { it.id }
-        val iterator = localOverlayMessages.iterator()
-        while (iterator.hasNext()) {
-            val message = iterator.next()
-            if (message.id in serverIds) {
-                iterator.remove()
-                localToServerMessageIds.remove(message.id)
-            }
-        }
+        optimisticMessageStore.pruneOverlayMessages(serverMessages)
     }
 
     private fun syncOverlayMessagesWithServer(serverMessages: List<ChatMessage>) {
-        if (localOverlayMessages.isEmpty() || localToServerMessageIds.isEmpty()) return
-        val serverById = serverMessages.associateBy { it.id }
-        for (index in localOverlayMessages.indices) {
-            val overlayMessage = localOverlayMessages[index]
-            val mappedServerId = localToServerMessageIds[overlayMessage.id]?.trim().orEmpty()
-            if (mappedServerId.isBlank()) continue
-            val serverMessage = serverById[mappedServerId] ?: continue
-            localOverlayMessages[index] = serverMessage.copy(
-                id = overlayMessage.id,
-                sendState = MessageSendState.SENT
-            )
-        }
+        optimisticMessageStore.syncOverlayMessagesWithServer(serverMessages)
     }
 
     private fun appendOverlayMessage(message: ChatMessage) {
-        localOverlayMessages += message
+        optimisticMessageStore.appendOverlayMessage(message)
         submitVisibleMessages(mergeMessagesForDisplay())
     }
 
@@ -907,83 +669,27 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun markOverlayMessageSent(localId: String, confirmedMessage: ChatMessage) {
-        localToServerMessageIds[localId] = confirmedMessage.id
-        val replacement = confirmedMessage.copy(id = localId, sendState = MessageSendState.SENT)
-        val index = localOverlayMessages.indexOfFirst { it.id == localId }
-        if (index >= 0) {
-            localOverlayMessages[index] = replacement
-        } else if (latestMessages.none { it.id == confirmedMessage.id }) {
-            localOverlayMessages += replacement
-        }
+        optimisticMessageStore.markOverlayMessageSent(localId, confirmedMessage, latestMessages)
         submitVisibleMessages(mergeMessagesForDisplay())
     }
 
     private fun markOverlayMessageFailed(localId: String) {
-        localToServerMessageIds.remove(localId)
-        val index = localOverlayMessages.indexOfFirst { it.id == localId }
-        if (index < 0) return
-        localOverlayMessages[index] = localOverlayMessages[index].copy(sendState = MessageSendState.FAILED)
+        optimisticMessageStore.markOverlayMessageFailed(localId)
         submitVisibleMessages(mergeMessagesForDisplay())
     }
 
     private fun removeOverlayMessage(rawId: String?) {
-        val normalizedId = rawId?.trim().orEmpty()
-        if (normalizedId.isBlank() || localOverlayMessages.isEmpty()) return
-        var removed = false
-        val iterator = localOverlayMessages.iterator()
-        while (iterator.hasNext()) {
-            val overlayMessage = iterator.next()
-            val mappedServerId = localToServerMessageIds[overlayMessage.id]?.trim().orEmpty()
-            if (overlayMessage.id == normalizedId || (mappedServerId.isNotBlank() && mappedServerId == normalizedId)) {
-                iterator.remove()
-                localToServerMessageIds.remove(overlayMessage.id)
-                removed = true
-            }
-        }
-        if (removed) {
+        if (optimisticMessageStore.removeOverlayMessage(rawId)) {
             submitVisibleMessages(mergeMessagesForDisplay())
         }
     }
 
     private fun resolveServerMessageId(rawId: String?): String? {
-        val id = rawId?.trim().orEmpty()
-        if (id.isBlank()) return null
-        if (!id.startsWith("local:", ignoreCase = true)) return id
-        return localToServerMessageIds[id]?.trim().orEmpty().ifBlank { null }
+        return optimisticMessageStore.resolveServerMessageId(rawId)
     }
 
     private fun sanitizeReplyMessageId(message: ChatMessage?): String? {
         return resolveServerMessageId(message?.id)
-    }
-
-    private fun nextLocalMessageId(timestampMs: Long): String {
-        return "local:${timestampMs}:${localMessageSequence++}"
-    }
-
-    private fun buildOptimisticBaseMessage(
-        user: UserProfile,
-        type: MessageType,
-        text: String,
-        replyTarget: ChatMessage?,
-        timestampMs: Long = System.currentTimeMillis()
-    ): ChatMessage {
-        val localId = nextLocalMessageId(timestampMs)
-        return ChatMessage(
-            id = localId,
-            senderId = user.uid,
-            senderName = user.displayName.ifBlank { user.login },
-            senderAvatarUrl = user.avatarUrl,
-            text = text,
-            type = type,
-            replyToMessageId = sanitizeReplyMessageId(replyTarget),
-            replyToSenderName = replyTarget?.senderName,
-            replyToText = replyTarget?.let(::replyPreviewText),
-            replyToImageUrl = replyTarget?.let(::replyPreviewImageUrl),
-            timestamp = timestampMs,
-            deliveredBy = listOf(user.uid),
-            readBy = listOf(user.uid),
-            sendState = MessageSendState.SENDING
-        )
     }
 
     private fun buildOptimisticTextMessage(
@@ -991,12 +697,7 @@ class ChatActivity : AppCompatActivity() {
         text: String,
         replyTarget: ChatMessage?
     ): ChatMessage {
-        return buildOptimisticBaseMessage(
-            user = user,
-            type = MessageType.TEXT,
-            text = text,
-            replyTarget = replyTarget
-        )
+        return optimisticMessageStore.buildOptimisticTextMessage(user, text, replyTarget)
     }
 
     private fun buildOptimisticVoiceMessage(
@@ -1004,14 +705,7 @@ class ChatActivity : AppCompatActivity() {
         durationSec: Int,
         replyTarget: ChatMessage?
     ): ChatMessage {
-        return buildOptimisticBaseMessage(
-            user = user,
-            type = MessageType.VOICE,
-            text = VOICE_PREVIEW_TEXT,
-            replyTarget = replyTarget
-        ).copy(
-            voiceDurationSec = durationSec.coerceAtLeast(0)
-        )
+        return optimisticMessageStore.buildOptimisticVoiceMessage(user, durationSec, replyTarget)
     }
 
     private fun buildOptimisticImageMessage(
@@ -1022,22 +716,13 @@ class ChatActivity : AppCompatActivity() {
         caption: String,
         replyTarget: ChatMessage?
     ): ChatMessage {
-        val message = buildOptimisticBaseMessage(
+        return optimisticMessageStore.buildOptimisticImageMessage(
             user = user,
-            type = MessageType.IMAGE,
-            text = caption.ifBlank { PHOTO_PREVIEW_TEXT },
+            imageUrls = imageUrls,
+            imageWidths = imageWidths,
+            imageHeights = imageHeights,
+            caption = caption,
             replyTarget = replyTarget
-        )
-        val safeImageUrls = imageUrls.mapIndexed { index, value ->
-            value.ifBlank { "pending://image/${message.id}/$index" }
-        }
-        return message.copy(
-            imageUrl = safeImageUrls.firstOrNull() ?: "pending://image/${message.id}",
-            imageUrls = safeImageUrls,
-            imageWidth = imageWidths.firstOrNull()?.coerceAtLeast(0) ?: 0,
-            imageHeight = imageHeights.firstOrNull()?.coerceAtLeast(0) ?: 0,
-            imageWidths = imageWidths.map { it.coerceAtLeast(0) },
-            imageHeights = imageHeights.map { it.coerceAtLeast(0) }
         )
     }
 
@@ -1046,16 +731,7 @@ class ChatActivity : AppCompatActivity() {
         durationSec: Int,
         replyTarget: ChatMessage?
     ): ChatMessage {
-        val message = buildOptimisticBaseMessage(
-            user = user,
-            type = MessageType.VIDEO,
-            text = VIDEO_PREVIEW_TEXT,
-            replyTarget = replyTarget
-        )
-        return message.copy(
-            videoUrl = "pending://video/${message.id}",
-            videoDurationSec = durationSec.coerceAtLeast(0)
-        )
+        return optimisticMessageStore.buildOptimisticVideoMessage(user, durationSec, replyTarget)
     }
 
     private fun submitVisibleMessages(messages: List<ChatMessage>) {
@@ -1119,18 +795,7 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun captureViewportAnchor(): ViewportAnchor? {
-        val list = adapter?.currentList.orEmpty()
-        if (list.isEmpty()) return null
-        val layoutManager = binding.recyclerMessages.layoutManager as? LinearLayoutManager ?: return null
-        val firstVisible = layoutManager.findFirstVisibleItemPosition()
-        if (firstVisible < 0 || firstVisible > list.lastIndex) return null
-        val anchorView = layoutManager.findViewByPosition(firstVisible)
-        val anchorOffset = (anchorView?.top ?: binding.recyclerMessages.paddingTop) - binding.recyclerMessages.paddingTop
-        return ViewportAnchor(
-            messageId = list[firstVisible].id,
-            index = firstVisible,
-            offsetPx = anchorOffset
-        )
+        return viewportController.captureAnchor()
     }
 
     private fun applySavedScrollPosition(
@@ -1138,35 +803,13 @@ class ChatActivity : AppCompatActivity() {
         fallbackIndex: Int,
         anchorOffsetPx: Int
     ) {
-        val layoutManager = binding.recyclerMessages.layoutManager as? LinearLayoutManager ?: return
-        val maxIndex = (adapter?.currentList?.lastIndex ?: -1)
-        if (maxIndex < 0) return
-
-        val normalizedOffset = anchorOffsetPx.coerceIn(
-            -binding.recyclerMessages.height.coerceAtLeast(1),
-            binding.recyclerMessages.height.coerceAtLeast(1)
-        )
-
-        fun resolveTargetIndex(): Int {
-            val list = adapter?.currentList.orEmpty()
-            val indexById = anchorMessageId?.let { messageId ->
-                list.indexOfFirst { it.id == messageId }
-            } ?: -1
-            val target = if (indexById >= 0) indexById else fallbackIndex
-            return target.coerceIn(0, maxIndex)
-        }
-
-        fun applyNow() {
-            val targetIndex = resolveTargetIndex()
-            layoutManager.scrollToPositionWithOffset(targetIndex, normalizedOffset)
-        }
-
         isApplyingViewportAnchor = true
-        applyNow()
-        binding.recyclerMessages.post {
-            applyNow()
-            val capturedAnchor = captureViewportAnchor()
-            if (isAtBottom()) {
+        viewportController.applySavedScrollPosition(
+            anchorMessageId = anchorMessageId,
+            fallbackIndex = fallbackIndex,
+            anchorOffsetPx = anchorOffsetPx
+        ) { capturedAnchor, atBottom, normalizedOffset ->
+            if (atBottom) {
                 keepViewportStableOnUpdates = false
                 lockedViewportAnchor = null
                 userManuallyScrolledAwayFromBottom = false
@@ -1186,11 +829,7 @@ class ChatActivity : AppCompatActivity() {
 
     private fun findFirstUnreadIndex(messages: List<ChatMessage>): Int {
         val myUid = currentUser?.uid.orEmpty()
-        if (myUid.isBlank()) return -1
-
-        return messages.indexOfFirst { message ->
-            message.senderId != myUid && message.readBy.none { readerId -> readerId == myUid }
-        }
+        return viewportController.firstUnreadIndex(messages, myUid)
     }
 
     private fun markVisibleIncomingAsReadIfNeeded() {
@@ -1225,42 +864,11 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun latestVisibleUnreadIncomingTimestamp(myUid: String): Long {
-        if (myUid.isBlank()) return 0L
-        val messages = adapter?.currentList.orEmpty()
-        if (messages.isEmpty()) return 0L
-
-        val layoutManager = binding.recyclerMessages.layoutManager as? LinearLayoutManager ?: return 0L
-        val firstVisible = layoutManager.findFirstVisibleItemPosition()
-        val lastVisible = layoutManager.findLastVisibleItemPosition()
-        if (firstVisible == RecyclerView.NO_POSITION || lastVisible == RecyclerView.NO_POSITION) {
-            return 0L
-        }
-
-        val start = min(firstVisible, lastVisible).coerceAtLeast(0)
-        val end = max(firstVisible, lastVisible).coerceAtMost(messages.lastIndex)
-        if (start > end) return 0L
-
-        var latestTimestampMs = 0L
-        for (index in start..end) {
-            val message = messages[index]
-            if (message.senderId == myUid) continue
-            if (message.readBy.any { readerId -> readerId == myUid }) continue
-            if (message.timestamp > latestTimestampMs) {
-                latestTimestampMs = message.timestamp
-            }
-        }
-        return latestTimestampMs
+        return viewportController.latestVisibleUnreadIncomingTimestamp(myUid)
     }
 
     private fun scrollToMessageIndex(index: Int) {
-        val layoutManager = binding.recyclerMessages.layoutManager as? LinearLayoutManager ?: return
-        val lastIndex = adapter?.currentList?.lastIndex ?: return
-        if (lastIndex < 0) return
-
-        val safeIndex = index.coerceIn(0, lastIndex)
-        val anchorIndex = (safeIndex - 1).coerceAtLeast(0)
-        layoutManager.scrollToPositionWithOffset(anchorIndex, 0)
-        updateScrollToBottomButton()
+        viewportController.scrollToMessageIndex(index)
     }
 
     private fun shouldAutoScrollToBottom(): Boolean {
@@ -1274,46 +882,16 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun isAtBottom(): Boolean {
-        val layoutManager = binding.recyclerMessages.layoutManager as? LinearLayoutManager ?: return true
-        val total = adapter?.currentList?.size ?: 0
-        if (total <= 1) return true
-
-        val lastVisible = layoutManager.findLastVisibleItemPosition()
-        if (lastVisible < 0) return true
-
-        return lastVisible >= total - 1
+        return viewportController.isAtBottom()
     }
 
     private fun scrollToBottom(animated: Boolean) {
-        val lastIndex = (adapter?.currentList?.lastIndex ?: -1)
-        if (lastIndex < 0) return
         userManuallyScrolledAwayFromBottom = false
-        if (animated) {
-            binding.recyclerMessages.smoothScrollToPosition(lastIndex)
-        } else {
-            binding.recyclerMessages.scrollToPosition(lastIndex)
-        }
-        updateScrollToBottomButton()
+        viewportController.scrollToBottom(animated)
     }
 
     private fun updateScrollToBottomButton() {
-        val listSize = adapter?.currentList?.size ?: 0
-        if (listSize <= 1) {
-            binding.btnScrollToBottom.isVisible = false
-            return
-        }
-        val layoutManager = binding.recyclerMessages.layoutManager as? LinearLayoutManager
-        if (layoutManager == null) {
-            binding.btnScrollToBottom.isVisible = false
-            return
-        }
-        val lastVisible = layoutManager.findLastVisibleItemPosition()
-        if (lastVisible < 0) {
-            binding.btnScrollToBottom.isVisible = false
-            return
-        }
-        val distanceToBottom = (listSize - 1) - lastVisible
-        binding.btnScrollToBottom.isVisible = distanceToBottom > 0
+        viewportController.updateScrollToBottomButton()
     }
 
     private fun persistCurrentScrollState() {
@@ -1324,13 +902,7 @@ class ChatActivity : AppCompatActivity() {
             isAtBottom()
         }
 
-        AppContainer.sessionStore.saveChatScrollState(
-            chatId = chatId,
-            anchorMessageId = anchor.messageId,
-            anchorIndex = anchor.index,
-            anchorOffsetPx = anchor.offsetPx,
-            wasAtBottom = atBottom
-        )
+        viewportController.persistCurrentScrollState(anchor, atBottom)
     }
 
     private fun sendMessage() {
@@ -1353,7 +925,7 @@ class ChatActivity : AppCompatActivity() {
         val rawText = binding.etMessage.text?.toString().orEmpty().trim()
         if (rawText.isBlank()) return
 
-        val replyTarget = replyTargetMessage
+        val replyTarget = currentReplyTarget()
         val optimisticMessage = buildOptimisticTextMessage(
             user = user,
             text = rawText,
@@ -1504,56 +1076,7 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun setupEmojiPanel() {
-        emojiAdapter = EmojiAdapter { emoji -> insertEmoji(emoji) }
-        binding.recyclerEmoji.layoutManager = GridLayoutManager(this, EMOJI_GRID_SPAN_COUNT)
-        binding.recyclerEmoji.adapter = emojiAdapter
-        binding.recyclerEmoji.setHasFixedSize(true)
-        binding.recyclerEmoji.overScrollMode = View.OVER_SCROLL_NEVER
-        if (binding.recyclerEmoji.itemDecorationCount == 0) {
-            binding.recyclerEmoji.addItemDecoration(
-                EmojiGridSpacingDecoration(
-                    spanCount = EMOJI_GRID_SPAN_COUNT,
-                    horizontalSpacingPx = dpToPx(EMOJI_GRID_HORIZONTAL_SPACING_DP),
-                    verticalSpacingPx = dpToPx(EMOJI_GRID_VERTICAL_SPACING_DP)
-                )
-            )
-        }
-        emojiCategories = TelegramEmojiCatalog.load(this)
-        applyEmojiPanelHeight()
-
-        binding.emojiTabs.removeAllTabs()
-        emojiCategories.forEachIndexed { index, category ->
-            binding.emojiTabs.addTab(binding.emojiTabs.newTab().setText(category.icon), index == 0)
-        }
-        applyEmojiSection(0)
-
-        binding.emojiTabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
-            override fun onTabSelected(tab: TabLayout.Tab) {
-                applyEmojiSection(tab.position)
-            }
-
-            override fun onTabUnselected(tab: TabLayout.Tab) = Unit
-            override fun onTabReselected(tab: TabLayout.Tab) = Unit
-        })
-
-        binding.btnEmoji.setOnClickListener { toggleEmojiPanel() }
-        binding.etMessage.setOnTouchListener { _, event ->
-            if (event.actionMasked == MotionEvent.ACTION_DOWN && binding.emojiContainer.isVisible) {
-                hideEmojiPanel(showKeyboard = true)
-            }
-            false
-        }
-        binding.etMessage.setOnFocusChangeListener { _, hasFocus ->
-            val keyboardVisible = liveKeyboardHeightPx() > 0
-            if (hasFocus && keyboardVisible && binding.emojiContainer.isVisible && !pendingKeyboardShowTransition) {
-                hideEmojiPanel(showKeyboard = false)
-            }
-        }
-        binding.etMessage.setOnClickListener {
-            if (binding.emojiContainer.isVisible) {
-                hideEmojiPanel(showKeyboard = true)
-            }
-        }
+        emojiKeyboardController.setup()
     }
 
     private fun hasDraftText(): Boolean {
@@ -1565,54 +1088,19 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun isEditingMessage(): Boolean {
-        return inlineEditState != null
+        return inlineEditController.isEditingMessage()
     }
 
     private fun isEditingPhotoMessage(): Boolean {
-        return inlineEditState?.message?.type == MessageType.IMAGE
+        return inlineEditController.isEditingPhotoMessage()
     }
 
     private fun isEditingTextMessage(): Boolean {
-        return inlineEditState?.message?.type == MessageType.TEXT
+        return inlineEditController.isEditingTextMessage()
     }
 
     private fun updateInlineEditUi() {
-        val editState = inlineEditState
-        binding.editContainer.isVisible = editState != null && editState.message.type != MessageType.IMAGE
-        if (editState == null) {
-            binding.tvEditTitle.text = ""
-            binding.tvEditText.text = ""
-            binding.btnCancelEdit.isEnabled = false
-            return
-        }
-
-        binding.btnCancelEdit.isEnabled = true
-        binding.tvEditTitle.text = when (editState.message.type) {
-            MessageType.IMAGE -> "Редактирование фото"
-            MessageType.VOICE -> "Редактирование голосового"
-            MessageType.VIDEO -> "Редактирование видео"
-            MessageType.TEXT -> "Редактирование сообщения"
-        }
-        binding.tvEditText.text = when (editState.message.type) {
-            MessageType.IMAGE -> {
-                val caption = editState.message.text.replace('\n', ' ')
-                    .trim()
-                    .takeIf { it.isNotBlank() && it != PHOTO_PREVIEW_TEXT }
-                caption ?: "Фото: ${resolveMessagePhotoUrls(editState.message).size}"
-            }
-
-            MessageType.VOICE -> {
-                editState.message.text.replace('\n', ' ').trim().ifBlank { VOICE_PREVIEW_TEXT }
-            }
-
-            MessageType.VIDEO -> {
-                editState.message.text.replace('\n', ' ').trim().ifBlank { VIDEO_PREVIEW_TEXT }
-            }
-
-            MessageType.TEXT -> {
-                editState.message.text.replace('\n', ' ').trim().ifBlank { "Текст сообщения" }
-            }
-        }
+        inlineEditController.updateInlineEditUi()
     }
 
     private fun updateComposerActionState() {
@@ -1628,7 +1116,7 @@ class ChatActivity : AppCompatActivity() {
         var added = 0
         for (uri in uris) {
             val editedExistingCount = if (isEditingPhotoMessage()) {
-                resolveMessagePhotoUrls(inlineEditState!!.message).count { it !in removedEditedPhotoUrls }
+                inlineEditController.existingPhotoCountForLimit()
             } else {
                 0
             }
@@ -1660,12 +1148,10 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun updatePhotoDraftUi() {
-        val editState = inlineEditState
+        val editState = inlineEditController.currentState
         val previewItems = when {
             editState?.message?.type == MessageType.IMAGE -> {
-                val existing = resolveMessagePhotoUrls(editState.message)
-                    .filterNot { it in removedEditedPhotoUrls }
-                    .map { PhotoDraftPreview(source = it, existingUrl = it, selectedUriIndex = null) }
+                val existing = inlineEditController.existingPhotoPreviews()
                 val selected = selectedPhotoUris.mapIndexed { index, uri ->
                     PhotoDraftPreview(source = uri.toString(), existingUrl = null, selectedUriIndex = index)
                 }
@@ -1727,18 +1213,14 @@ class ChatActivity : AppCompatActivity() {
                 selectedPhotoUris.removeAt(selectedIndex)
             }
         } else {
-            preview.existingUrl?.let { removedEditedPhotoUrls += it }
+            preview.existingUrl?.let { inlineEditController.removeExistingPhoto(it) }
         }
         updatePhotoDraftUi()
         updateComposerActionState()
     }
 
     private fun currentEditedPhotoSources(): List<String> {
-        val message = inlineEditState?.message ?: return emptyList()
-        if (message.type != MessageType.IMAGE) return emptyList()
-        return resolveMessagePhotoUrls(message)
-            .filterNot { it in removedEditedPhotoUrls } +
-            selectedPhotoUris.map(Uri::toString)
+        return inlineEditController.currentEditedPhotoSources()
     }
 
     private fun bindPreviewPhoto(imageView: ImageView, source: String) {
@@ -1751,294 +1233,11 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun isEmojiPanelActiveOrPending(): Boolean {
-        return binding.emojiContainer.isVisible || pendingEmojiShowTransition
-    }
-
-    private fun syncEmojiToggleIcon() {
-        val emojiActiveOrPending =
-            (binding.emojiContainer.isVisible || pendingEmojiShowTransition) && !pendingKeyboardShowTransition
-        val target = getString(
-            if (emojiActiveOrPending) {
-                R.string.emoji_keyboard
-            } else {
-                R.string.emoji_open
-            }
-        )
-        if (binding.btnEmoji.text != target) {
-            binding.btnEmoji.text = target
-        }
-    }
-
-    private fun applyEmojiSection(index: Int) {
-        val categories = emojiCategories
-        if (categories.isEmpty()) {
-            emojiAdapter.submit(emptyList())
-            return
-        }
-        val safeIndex = index.coerceIn(0, categories.lastIndex)
-        emojiAdapter.submit(categories[safeIndex].emojis)
-    }
-
-    private fun toggleEmojiPanel() {
-        if (isEmojiPanelActiveOrPending()) {
-            hideEmojiPanel(showKeyboard = true)
-        } else {
-            showEmojiPanel()
-        }
-    }
-
-    private fun showEmojiPanel() {
-        refreshKeyboardHeightFromInsets()
-        val targetHeight = resolveEmojiPanelHeightPx()
-        cancelPendingEmojiOpenFallback()
-        cancelPendingKeyboardHideEmojiFallback()
-        cancelEmojiPanelHeightAnimation()
-        pendingKeyboardShowTransition = false
-        pendingEmojiShowTransition = true
-        composerInsetReservePx = targetHeight
-        val liveKeyboardHeight = liveKeyboardHeightPx()
-        val initialPanelHeight = if (liveKeyboardHeight > 0) {
-            (targetHeight - liveKeyboardHeight).coerceIn(0, targetHeight)
-        } else {
-            0
-        }
-        applyEmojiPanelHeight(initialPanelHeight)
-        binding.emojiContainer.isVisible = true
-        syncEmojiToggleIcon()
-        binding.etMessage.clearFocus()
-        ViewCompat.requestApplyInsets(binding.root)
-
-        if (liveKeyboardHeight <= 0) {
-            pendingEmojiShowTransition = false
-            composerInsetReservePx = 0
-            animateEmojiPanelHeight(
-                fromHeight = initialPanelHeight,
-                toHeight = targetHeight
-            )
-            syncEmojiToggleIcon()
-            ViewCompat.requestApplyInsets(binding.root)
-            return
-        }
-        schedulePendingEmojiOpenFallback(targetHeight)
-        hideKeyboard()
+        return emojiKeyboardController.isActiveOrPending()
     }
 
     private fun hideEmojiPanel(showKeyboard: Boolean) {
-        if (!binding.emojiContainer.isVisible && !showKeyboard) return
-        cancelPendingEmojiOpenFallback()
-        cancelEmojiPanelHeightAnimation()
-        if (showKeyboard) {
-            val reserveHeight = (binding.emojiContainer.layoutParams?.height ?: 0)
-                .takeIf { it > 0 }
-                ?: resolveEmojiPanelHeightPx()
-            pendingEmojiShowTransition = false
-            pendingKeyboardShowTransition = true
-            composerInsetReservePx = reserveHeight
-            binding.emojiContainer.isVisible = true
-            applyEmojiPanelHeight(reserveHeight)
-            syncEmojiToggleIcon()
-            ViewCompat.requestApplyInsets(binding.root)
-            binding.etMessage.requestFocus()
-            showKeyboard()
-            schedulePendingKeyboardHideEmojiFallback()
-            return
-        }
-
-        pendingEmojiShowTransition = false
-        pendingKeyboardShowTransition = false
-        composerInsetReservePx = 0
-        cancelPendingKeyboardHideEmojiFallback()
-        val currentHeight = (binding.emojiContainer.layoutParams?.height ?: 0)
-            .takeIf { it > 0 }
-            ?: resolveEmojiPanelHeightPx()
-        animateEmojiPanelHeight(
-            fromHeight = currentHeight,
-            toHeight = 0,
-            onEnd = {
-                binding.emojiContainer.isVisible = false
-                applyEmojiPanelHeight()
-                syncEmojiToggleIcon()
-                ViewCompat.requestApplyInsets(binding.root)
-            }
-        )
-        syncEmojiToggleIcon()
-        ViewCompat.requestApplyInsets(binding.root)
-    }
-
-    private fun schedulePendingEmojiOpenFallback(targetHeight: Int) {
-        cancelPendingEmojiOpenFallback()
-        val runnable = Runnable {
-            if (!pendingEmojiShowTransition) return@Runnable
-            pendingEmojiShowTransition = false
-            composerInsetReservePx = 0
-            applyEmojiPanelHeight(targetHeight)
-            binding.emojiContainer.isVisible = true
-            syncEmojiToggleIcon()
-            ViewCompat.requestApplyInsets(binding.root)
-        }
-        pendingEmojiOpenFallbackRunnable = runnable
-        emojiTransitionHandler.postDelayed(runnable, EMOJI_OPEN_FALLBACK_DELAY_MS)
-    }
-
-    private fun cancelPendingEmojiOpenFallback() {
-        pendingEmojiOpenFallbackRunnable?.let { emojiTransitionHandler.removeCallbacks(it) }
-        pendingEmojiOpenFallbackRunnable = null
-    }
-
-    private fun schedulePendingKeyboardHideEmojiFallback() {
-        cancelPendingKeyboardHideEmojiFallback()
-        val runnable = Runnable {
-            if (!pendingKeyboardShowTransition) return@Runnable
-            finalizePendingKeyboardShowTransition()
-            ViewCompat.requestApplyInsets(binding.root)
-        }
-        pendingKeyboardHideEmojiFallbackRunnable = runnable
-        emojiTransitionHandler.postDelayed(runnable, KEYBOARD_HIDE_EMOJI_FALLBACK_DELAY_MS)
-    }
-
-    private fun cancelPendingKeyboardHideEmojiFallback() {
-        pendingKeyboardHideEmojiFallbackRunnable?.let { emojiTransitionHandler.removeCallbacks(it) }
-        pendingKeyboardHideEmojiFallbackRunnable = null
-    }
-
-    private fun finalizePendingKeyboardShowTransition() {
-        pendingKeyboardShowTransition = false
-        composerInsetReservePx = 0
-        binding.emojiContainer.isVisible = false
-        applyEmojiPanelHeight()
-        cancelPendingKeyboardHideEmojiFallback()
-    }
-
-    private fun cancelKeyboardInsetAnimation() {
-        keyboardInsetAnimator?.cancel()
-        keyboardInsetAnimator = null
-    }
-
-    private fun applyInputBarBottomInset(targetInsetPx: Int, animate: Boolean) {
-        val target = targetInsetPx.coerceAtLeast(0)
-        targetInputBarInsetPx = target
-
-        if (!animate) {
-            cancelKeyboardInsetAnimation()
-            appliedInputBarInsetPx = target
-            binding.inputBar.updatePadding(bottom = inputBarBaseBottomPaddingPx + target)
-            return
-        }
-
-        val delta = abs(target - appliedInputBarInsetPx)
-        if (delta <= dpToPx(KEYBOARD_INSET_SMALL_STEP_DP)) {
-            // For already-smooth frame-by-frame inset updates, follow them directly.
-            cancelKeyboardInsetAnimation()
-            appliedInputBarInsetPx = target
-            binding.inputBar.updatePadding(bottom = inputBarBaseBottomPaddingPx + target)
-            return
-        }
-
-        if (delta < dpToPx(KEYBOARD_INSET_ANIMATION_TRIGGER_DP)) {
-            appliedInputBarInsetPx = target
-            binding.inputBar.updatePadding(bottom = inputBarBaseBottomPaddingPx + target)
-            return
-        }
-
-        val from = appliedInputBarInsetPx
-        cancelKeyboardInsetAnimation()
-        keyboardInsetAnimator = ValueAnimator.ofInt(from, target).apply {
-            duration = KEYBOARD_INSET_ANIMATION_MS
-            interpolator = FastOutSlowInInterpolator()
-            addUpdateListener { animator ->
-                val value = (animator.animatedValue as Int).coerceAtLeast(0)
-                appliedInputBarInsetPx = value
-                binding.inputBar.updatePadding(bottom = inputBarBaseBottomPaddingPx + value)
-            }
-            addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: Animator) {
-                    if (keyboardInsetAnimator === animation) {
-                        keyboardInsetAnimator = null
-                    }
-                }
-
-                override fun onAnimationCancel(animation: Animator) {
-                    if (keyboardInsetAnimator === animation) {
-                        keyboardInsetAnimator = null
-                    }
-                }
-            })
-            start()
-        }
-    }
-
-    private fun cancelEmojiPanelHeightAnimation() {
-        emojiPanelHeightAnimator?.cancel()
-        emojiPanelHeightAnimator = null
-    }
-
-    private fun animateEmojiPanelHeight(
-        fromHeight: Int,
-        toHeight: Int,
-        onEnd: (() -> Unit)? = null
-    ) {
-        val safeFrom = fromHeight.coerceAtLeast(0)
-        val safeTo = toHeight.coerceAtLeast(0)
-        if (safeFrom == safeTo) {
-            applyEmojiPanelHeight(safeTo)
-            onEnd?.invoke()
-            return
-        }
-        cancelEmojiPanelHeightAnimation()
-        emojiPanelHeightAnimator = ValueAnimator.ofInt(safeFrom, safeTo).apply {
-            duration = EMOJI_PANEL_HEIGHT_ANIMATION_MS
-            interpolator = FastOutSlowInInterpolator()
-            addUpdateListener { animator ->
-                applyEmojiPanelHeight((animator.animatedValue as Int).coerceAtLeast(0))
-            }
-            addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: Animator) {
-                    if (emojiPanelHeightAnimator === animation) {
-                        emojiPanelHeightAnimator = null
-                    }
-                    onEnd?.invoke()
-                }
-
-                override fun onAnimationCancel(animation: Animator) {
-                    if (emojiPanelHeightAnimator === animation) {
-                        emojiPanelHeightAnimator = null
-                    }
-                }
-            })
-            start()
-        }
-    }
-
-    private fun applyEmojiPanelHeight(targetHeightOverride: Int? = null) {
-        val targetHeight = targetHeightOverride ?: resolveEmojiPanelHeightPx()
-        val params = binding.emojiContainer.layoutParams
-        if (params.height != targetHeight) {
-            params.height = targetHeight
-            binding.emojiContainer.layoutParams = params
-        }
-    }
-
-    private fun resolveEmojiPanelHeightPx(): Int {
-        val liveImeHeight = liveKeyboardHeightPx()
-        if (liveImeHeight >= MIN_KEYBOARD_HEIGHT_TRACK_PX) return liveImeHeight
-        if (lastKnownKeyboardHeightPx > 0) return lastKnownKeyboardHeightPx
-        val fallback = (resources.displayMetrics.density * DEFAULT_EMOJI_PANEL_HEIGHT_DP).toInt()
-        return fallback.coerceAtLeast((resources.displayMetrics.density * 220f).toInt())
-    }
-
-    private fun refreshKeyboardHeightFromInsets() {
-        val liveImeHeight = liveKeyboardHeightPx()
-        if (liveImeHeight < MIN_KEYBOARD_HEIGHT_TRACK_PX) return
-        if (liveImeHeight == lastKnownKeyboardHeightPx) return
-        lastKnownKeyboardHeightPx = liveImeHeight
-        persistKeyboardHeight(liveImeHeight)
-    }
-
-    private fun liveKeyboardHeightPx(): Int {
-        val insets = ViewCompat.getRootWindowInsets(binding.root) ?: return 0
-        val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-        val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-        return (ime.bottom - bars.bottom).coerceAtLeast(0)
+        emojiKeyboardController.hideEmojiPanel(showKeyboard)
     }
 
     private fun dpToPx(dp: Float): Int {
@@ -2046,454 +1245,34 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun restoreLastKeyboardHeight() {
-        val prefs = getSharedPreferences(UI_PREFS_NAME, MODE_PRIVATE)
-        lastKnownKeyboardHeightPx = prefs.getInt(PREF_LAST_KEYBOARD_HEIGHT_PX, 0)
-    }
-
-    private fun persistKeyboardHeight(heightPx: Int) {
-        getSharedPreferences(UI_PREFS_NAME, MODE_PRIVATE)
-            .edit()
-            .putInt(PREF_LAST_KEYBOARD_HEIGHT_PX, heightPx)
-            .apply()
-    }
-
-    private fun insertEmoji(emoji: String) {
-        val editable = binding.etMessage.text ?: return
-        val start = binding.etMessage.selectionStart.coerceAtLeast(0)
-        val end = binding.etMessage.selectionEnd.coerceAtLeast(0)
-        val from = min(start, end)
-        val to = max(start, end)
-        editable.replace(from, to, emoji)
+        emojiKeyboardController.restoreLastKeyboardHeight()
     }
 
     private fun hideKeyboard() {
-        val manager = getSystemService(InputMethodManager::class.java) ?: return
-        manager.hideSoftInputFromWindow(binding.etMessage.windowToken, 0)
+        emojiKeyboardController.hideKeyboard()
     }
 
     private fun showKeyboard() {
-        val manager = getSystemService(InputMethodManager::class.java) ?: return
-        binding.etMessage.post {
-            manager.showSoftInput(binding.etMessage, InputMethodManager.SHOW_IMPLICIT)
-        }
+        emojiKeyboardController.showKeyboard()
     }
 
     private fun handleVoiceButtonTouch(view: View, event: MotionEvent): Boolean {
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                voiceButtonPressed = true
-                longPressTriggered = false
-                voiceTouchDownX = event.x
-                voiceTouchDownY = event.y
-                voiceButtonLongPressHandler.removeCallbacks(voiceLongPressRunnable)
-                voiceButtonLongPressHandler.postDelayed(
-                    voiceLongPressRunnable,
-                    ViewConfiguration.getLongPressTimeout().toLong()
-                )
-                return true
-            }
-
-            MotionEvent.ACTION_MOVE -> {
-                if (!longPressTriggered) {
-                    val slop = ViewConfiguration.get(this).scaledTouchSlop
-                    val movedTooMuch =
-                        abs(event.x - voiceTouchDownX) > slop || abs(event.y - voiceTouchDownY) > slop
-                    if (movedTooMuch) {
-                        voiceButtonPressed = false
-                        voiceButtonLongPressHandler.removeCallbacks(voiceLongPressRunnable)
-                    }
-                }
-                return true
-            }
-
-            MotionEvent.ACTION_UP -> {
-                val wasLongPress = longPressTriggered
-                voiceButtonPressed = false
-                longPressTriggered = false
-                voiceButtonLongPressHandler.removeCallbacks(voiceLongPressRunnable)
-                if (wasLongPress) {
-                    stopAnyActiveRecording(send = true)
-                } else if (!isAnyRecordingInProgress()) {
-                    view.performClick()
-                }
-                return true
-            }
-
-            MotionEvent.ACTION_CANCEL -> {
-                val wasLongPress = longPressTriggered
-                voiceButtonPressed = false
-                longPressTriggered = false
-                voiceButtonLongPressHandler.removeCallbacks(voiceLongPressRunnable)
-                if (wasLongPress) {
-                    stopAnyActiveRecording(send = false)
-                }
-                return true
-            }
-        }
-        return false
+        return recordingController.handleVoiceButtonTouch(view, event)
     }
 
     private fun isAnyRecordingInProgress(): Boolean =
-        isVoiceRecording || isVideoRecording || voiceRecorder != null || videoRecording != null
+        recordingController.isAnyRecordingInProgress()
 
     private fun toggleRecordMode() {
-        if (isAnyRecordingInProgress()) return
-        currentRecordMode = when (currentRecordMode) {
-            RecordMode.VOICE -> RecordMode.VIDEO
-            RecordMode.VIDEO -> RecordMode.VOICE
-        }
-        if (currentRecordMode == RecordMode.VOICE) {
-            releaseVideoCapture()
-        }
-        updateRecordingUi(recording = false, elapsedSec = 0)
-        val modeToast = if (currentRecordMode == RecordMode.VOICE) {
-            "Режим: голосовое"
-        } else {
-            "Режим: видеосообщение"
-        }
-        Toast.makeText(this, modeToast, Toast.LENGTH_SHORT).show()
+        recordingController.toggleRecordMode()
     }
 
     private fun switchVideoCamera() {
-        if (currentRecordMode != RecordMode.VIDEO) return
-        if (isVideoRecording || videoRecording != null) {
-            pendingCameraSwitchAfterFinalize = true
-            stopVideoRecording(send = false)
-            return
-        }
-        if (!switchVideoCameraNow()) {
-            ensureVideoCapture(
-                onReady = { _ ->
-                    if (!switchVideoCameraNow()) {
-                        Toast.makeText(this, "Не удалось переключить камеру", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                onError = {
-                    Toast.makeText(this, "Не удалось переключить камеру", Toast.LENGTH_SHORT).show()
-                }
-            )
-        }
-    }
-
-    private fun switchVideoCameraNow(): Boolean {
-        val provider = cameraProvider ?: return false
-        val preview = videoPreviewUseCase ?: return false
-        val capture = videoCapture ?: return false
-        val nextFacing = if (videoCameraFacing == CameraSelector.LENS_FACING_FRONT) {
-            CameraSelector.LENS_FACING_BACK
-        } else {
-            CameraSelector.LENS_FACING_FRONT
-        }
-        val selector = CameraSelector.Builder().requireLensFacing(nextFacing).build()
-        return runCatching {
-            provider.unbindAll()
-            provider.bindToLifecycle(this, selector, preview, capture)
-            videoCameraFacing = nextFacing
-            true
-        }.getOrElse {
-            false
-        }
-    }
-
-    private fun ensureAudioPermissionAndRecord() {
-        val granted = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
-        if (granted) {
-            startVoiceRecordingInternal()
-        } else {
-            pendingPermissionRecordingType = RecordingType.VOICE
-            recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        }
-    }
-
-    private fun ensureVideoPermissionsAndRecord() {
-        val cameraGranted = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.CAMERA
-        ) == PackageManager.PERMISSION_GRANTED
-        val audioGranted = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
-        if (cameraGranted && audioGranted) {
-            startVideoRecordingInternal()
-        } else {
-            pendingPermissionRecordingType = RecordingType.VIDEO
-            videoPermissionsLauncher.launch(
-                arrayOf(
-                    Manifest.permission.CAMERA,
-                    Manifest.permission.RECORD_AUDIO
-                )
-            )
-        }
+        recordingController.switchVideoCamera()
     }
 
     private fun stopAnyActiveRecording(send: Boolean) {
-        when {
-            isVoiceRecording || voiceRecorder != null -> stopVoiceRecording(send)
-            isVideoRecording || videoRecording != null -> stopVideoRecording(send)
-        }
-    }
-
-    private fun startVoiceRecordingInternal() {
-        if (isAnyRecordingInProgress() || !voiceButtonPressed) return
-        hideEmojiPanel(showKeyboard = false)
-
-        val tempFile = File(cacheDir, "voice_${System.currentTimeMillis()}.m4a")
-        val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            MediaRecorder(this)
-        } else {
-            @Suppress("DEPRECATION")
-            MediaRecorder()
-        }
-
-        val result = runCatching {
-            recorder.apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioEncodingBitRate(64_000)
-                setAudioSamplingRate(22_050)
-                setOutputFile(tempFile.absolutePath)
-                prepare()
-                start()
-            }
-        }
-
-        result.onSuccess {
-            voiceRecorder = recorder
-            voiceRecordFile = tempFile
-            recordingStartedAtMs = System.currentTimeMillis()
-            isVoiceRecording = true
-            recordingUiHandler.removeCallbacks(recordingTicker)
-            recordingUiHandler.post(recordingTicker)
-            updateRecordingUi(recording = true, elapsedSec = 0)
-        }.onFailure {
-            runCatching { recorder.release() }
-            runCatching { tempFile.delete() }
-            Toast.makeText(this, "Не удалось начать запись голоса", Toast.LENGTH_SHORT).show()
-            updateRecordingUi(recording = false, elapsedSec = 0)
-        }
-    }
-
-    private fun stopVoiceRecording(send: Boolean) {
-        val recorder = voiceRecorder
-        val file = voiceRecordFile
-        if (recorder == null || file == null) {
-            isVoiceRecording = false
-            voiceRecorder = null
-            voiceRecordFile = null
-            recordingStartedAtMs = 0L
-            updateRecordingUi(recording = false, elapsedSec = 0)
-            return
-        }
-
-        val elapsedSec = ((System.currentTimeMillis() - recordingStartedAtMs) / 1000L).toInt().coerceAtLeast(0)
-        isVoiceRecording = false
-        recordingUiHandler.removeCallbacks(recordingTicker)
-        voiceRecorder = null
-        voiceRecordFile = null
-        recordingStartedAtMs = 0L
-
-        runCatching { recorder.stop() }
-        runCatching { recorder.release() }
-        updateRecordingUi(recording = false, elapsedSec = 0)
-
-        if (!send) {
-            runCatching { file.delete() }
-            return
-        }
-
-        if (!file.exists() || file.length() <= 0L) {
-            runCatching { file.delete() }
-            Toast.makeText(this, "Не удалось сохранить голосовое сообщение", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        uploadAndSendVoice(file, elapsedSec.coerceAtMost(MAX_VOICE_RECORD_DURATION_SEC))
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun startVideoRecordingInternal() {
-        if (isAnyRecordingInProgress() || !voiceButtonPressed) return
-        hideEmojiPanel(showKeyboard = false)
-        binding.videoRecordingContainer.isVisible = true
-
-        ensureVideoCapture(
-            onReady = { capture ->
-                val tempFile = File(cacheDir, "video_${System.currentTimeMillis()}.mp4")
-                val outputOptions = FileOutputOptions.Builder(tempFile).build()
-                pendingVideoSendAfterStop = true
-                videoRecordFile = tempFile
-
-                videoRecording = capture.output
-                    .prepareRecording(this, outputOptions)
-                    .withAudioEnabled()
-                    .start(ContextCompat.getMainExecutor(this)) { event ->
-                        when (event) {
-                            is VideoRecordEvent.Start -> {
-                                recordingStartedAtMs = System.currentTimeMillis()
-                                isVideoRecording = true
-                                recordingUiHandler.removeCallbacks(recordingTicker)
-                                recordingUiHandler.post(recordingTicker)
-                                updateRecordingUi(recording = true, elapsedSec = 0)
-                            }
-
-                            is VideoRecordEvent.Finalize -> {
-                                handleVideoFinalize(event)
-                            }
-                        }
-                    }
-            },
-            onError = {
-                binding.videoRecordingContainer.isVisible = false
-                Toast.makeText(this, "Не удалось запустить видеозапись", Toast.LENGTH_SHORT).show()
-                updateRecordingUi(recording = false, elapsedSec = 0)
-            }
-        )
-    }
-
-    private fun stopVideoRecording(send: Boolean) {
-        pendingVideoSendAfterStop = send
-        val recording = videoRecording
-        if (recording == null) {
-            isVideoRecording = false
-            if (!send) {
-                runCatching { videoRecordFile?.delete() }
-                videoRecordFile = null
-            }
-            recordingStartedAtMs = 0L
-            updateRecordingUi(recording = false, elapsedSec = 0)
-            if (pendingCameraSwitchAfterFinalize) {
-                pendingCameraSwitchAfterFinalize = false
-                switchVideoCameraNow()
-            }
-            return
-        }
-        recording.stop()
-    }
-
-    private fun handleVideoFinalize(event: VideoRecordEvent.Finalize) {
-        val file = videoRecordFile
-        val shouldSend = pendingVideoSendAfterStop
-        val durationSec = ((System.currentTimeMillis() - recordingStartedAtMs) / 1000L).toInt().coerceAtLeast(0)
-
-        isVideoRecording = false
-        recordingUiHandler.removeCallbacks(recordingTicker)
-        videoRecording = null
-        videoRecordFile = null
-        recordingStartedAtMs = 0L
-        updateRecordingUi(recording = false, elapsedSec = 0)
-
-        if (pendingCameraSwitchAfterFinalize) {
-            pendingCameraSwitchAfterFinalize = false
-            runCatching { file?.delete() }
-            if (!switchVideoCameraNow()) {
-                Toast.makeText(this, "Не удалось переключить камеру", Toast.LENGTH_SHORT).show()
-            }
-            if (voiceButtonPressed) {
-                startVideoRecordingInternal()
-            }
-            return
-        }
-
-        if (event.hasError()) {
-            runCatching { file?.delete() }
-            Toast.makeText(this, "Ошибка видеозаписи", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        if (!shouldSend) {
-            runCatching { file?.delete() }
-            return
-        }
-
-        if (file == null || !file.exists() || file.length() <= 0L) {
-            runCatching { file?.delete() }
-            Toast.makeText(this, "Не удалось сохранить видеосообщение", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        uploadAndSendVideo(file, durationSec.coerceAtMost(MAX_VIDEO_RECORD_DURATION_SEC))
-    }
-
-    private fun ensureVideoCapture(
-        onReady: (VideoCapture<Recorder>) -> Unit,
-        onError: (Throwable) -> Unit
-    ) {
-        val existingCapture = videoCapture
-        if (existingCapture != null) {
-            onReady(existingCapture)
-            return
-        }
-
-        val future = cameraProviderFuture ?: ProcessCameraProvider.getInstance(this).also {
-            cameraProviderFuture = it
-        }
-
-        future.addListener(
-            {
-                val provider = runCatching { future.get() }.getOrElse { throwable ->
-                    onError(throwable)
-                    return@addListener
-                }
-                runCatching {
-                    val preview = videoPreviewUseCase ?: Preview.Builder().build().apply {
-                        setSurfaceProvider(binding.videoRecordingPreview.surfaceProvider)
-                    }
-                    val recorder = Recorder.Builder()
-                        .setQualitySelector(QualitySelector.from(Quality.SD))
-                        .build()
-                    val capture = VideoCapture.withOutput(recorder)
-                    bindVideoUseCases(provider, preview, capture)
-                    cameraProvider = provider
-                    videoPreviewUseCase = preview
-                    videoCapture = capture
-                    capture
-                }.onSuccess(onReady).onFailure(onError)
-            },
-            ContextCompat.getMainExecutor(this)
-        )
-    }
-
-    private fun bindVideoUseCases(
-        provider: ProcessCameraProvider,
-        preview: Preview,
-        capture: VideoCapture<Recorder>
-    ) {
-        val preferredSelector = CameraSelector.Builder()
-            .requireLensFacing(videoCameraFacing)
-            .build()
-        try {
-            provider.unbindAll()
-            provider.bindToLifecycle(this, preferredSelector, preview, capture)
-            return
-        } catch (_: Throwable) {
-        }
-
-        val fallbackFacing = if (videoCameraFacing == CameraSelector.LENS_FACING_FRONT) {
-            CameraSelector.LENS_FACING_BACK
-        } else {
-            CameraSelector.LENS_FACING_FRONT
-        }
-        val fallbackSelector = CameraSelector.Builder()
-            .requireLensFacing(fallbackFacing)
-            .build()
-        provider.unbindAll()
-        provider.bindToLifecycle(this, fallbackSelector, preview, capture)
-        videoCameraFacing = fallbackFacing
-    }
-
-    private fun releaseVideoCapture() {
-        videoRecording?.stop()
-        videoRecording = null
-        pendingCameraSwitchAfterFinalize = false
-        runCatching { cameraProvider?.unbindAll() }
-        videoPreviewUseCase = null
-        videoCapture = null
-        binding.videoRecordingContainer.isVisible = false
+        recordingController.stopAnyActiveRecording(send)
     }
 
     private fun uploadAndSendVoice(file: File, durationSec: Int) {
@@ -2501,7 +1280,7 @@ class ChatActivity : AppCompatActivity() {
             runCatching { file.delete() }
             return
         }
-        val replyTarget = replyTargetMessage
+        val replyTarget = currentReplyTarget()
         val optimisticMessage = buildOptimisticVoiceMessage(
             user = user,
             durationSec = durationSec,
@@ -2548,7 +1327,7 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun saveInlineEditedMessage() {
-        val editState = inlineEditState ?: return
+        val editState = inlineEditController.currentState ?: return
         val message = editState.message
         val newText = binding.etMessage.text?.toString().orEmpty().trim()
         val replacementPhotoSources = if (message.type == MessageType.IMAGE) {
@@ -2591,7 +1370,7 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun sendPhotoDrafts(user: UserProfile) {
-        val replyTarget = replyTargetMessage
+        val replyTarget = currentReplyTarget()
         val draftUris = selectedPhotoUris.toList()
         if (draftUris.isEmpty()) return
 
@@ -2678,7 +1457,7 @@ class ChatActivity : AppCompatActivity() {
             runCatching { file.delete() }
             return
         }
-        val replyTarget = replyTargetMessage
+        val replyTarget = currentReplyTarget()
         val optimisticMessage = buildOptimisticVideoMessage(
             user = user,
             durationSec = durationSec,
@@ -2726,7 +1505,7 @@ class ChatActivity : AppCompatActivity() {
 
     private fun uploadAndSendPhoto(uri: Uri) {
         val user = currentUser ?: return
-        val replyTarget = replyTargetMessage
+        val replyTarget = currentReplyTarget()
         val rawCaption = binding.etMessage.text?.toString().orEmpty().trim()
         val optimisticMessage = buildOptimisticImageMessage(
             user = user,
@@ -2771,95 +1550,58 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun updateRecordingUi(recording: Boolean, elapsedSec: Int) {
-        if (recording) {
-            val label = if (isVideoRecording) {
-                "Идет запись видео (${elapsedSec}s/${MAX_VIDEO_RECORD_DURATION_SEC}s)"
-            } else {
-                "Идет запись голосового"
-            }
-            binding.tvRecordingStatus.isVisible = true
-            binding.tvRecordingStatus.text = label
-            binding.btnVoice.text = "■"
-            binding.videoRecordingContainer.isVisible = isVideoRecording
-            binding.btnSwitchVideoCamera.isVisible = isVideoRecording
-            binding.btnSend.isEnabled = false
-            binding.btnEmoji.isEnabled = false
-            binding.btnAttach.isEnabled = false
-            binding.etMessage.isEnabled = false
-        } else {
-            binding.tvRecordingStatus.isVisible = false
-            binding.videoRecordingContainer.isVisible = false
-            binding.btnSwitchVideoCamera.isVisible = false
-            binding.btnVoice.text = if (currentRecordMode == RecordMode.VOICE) {
-                "\uD83C\uDFA4"
-            } else {
-                "\uD83C\uDFA5"
-            }
-            binding.btnSend.isEnabled = true
-            binding.btnEmoji.isEnabled = true
-            binding.btnAttach.isEnabled = true
-            binding.etMessage.isEnabled = true
-        }
-        updateComposerActionState()
+        recordingController.updateRecordingUi(recording, elapsedSec)
     }
 
-    private fun showIncomingMessageActions(message: ChatMessage) {
-        val options = arrayOf(
-            getString(R.string.reply_message),
-            getString(R.string.delete_for_me)
+    private fun showIncomingMessageActions(message: ChatMessage, rawX: Float, rawY: Float) {
+        ActionSheetDialog.showAtPoint(
+            this,
+            listOf(
+                ActionSheetDialog.Action(getString(R.string.reply_message)) { setReplyTarget(message) },
+                ActionSheetDialog.Action(getString(R.string.delete_for_me), destructive = true) { deleteMessageForMe(message) }
+            ),
+            rawX,
+            rawY
         )
-
-        MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.message_actions))
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> setReplyTarget(message)
-                    1 -> deleteMessageForMe(message)
-                }
-            }
-            .show()
     }
 
-    private fun showOwnMessageActions(message: ChatMessage) {
+    private fun showOwnMessageActions(message: ChatMessage, rawX: Float, rawY: Float) {
         if (message.sendState != MessageSendState.SENT) {
             Toast.makeText(this, "Сообщение еще отправляется", Toast.LENGTH_SHORT).show()
             return
         }
         if (message.type != MessageType.TEXT && message.type != MessageType.IMAGE) {
-            showDeleteOwnMessageDialog(message)
+            showDeleteOwnMessageDialog(message, rawX, rawY)
             return
         }
 
-        val options = arrayOf(
-            getString(R.string.edit_message),
-            getString(R.string.delete_message)
-        )
-
-        MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.message_actions))
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> showEditMessageDialog(message)
-                    1 -> showDeleteOwnMessageDialog(message)
+        ActionSheetDialog.showAtPoint(
+            this,
+            listOf(
+                ActionSheetDialog.Action(getString(R.string.edit_message)) { showEditMessageDialog(message) },
+                ActionSheetDialog.Action(getString(R.string.delete_message), destructive = true) {
+                    showDeleteOwnMessageDialog(message, rawX, rawY)
                 }
-            }
-            .show()
+            ),
+            rawX,
+            rawY
+        )
     }
 
-    private fun showDeleteOwnMessageDialog(message: ChatMessage) {
-        val options = arrayOf(
-            getString(R.string.delete_for_everyone),
-            getString(R.string.delete_for_me)
-        )
-        MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.delete_message))
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> deleteMessageForEveryone(message)
-                    1 -> deleteMessageForMe(message)
-                }
+    private fun showDeleteOwnMessageDialog(message: ChatMessage, rawX: Float? = null, rawY: Float? = null) {
+        val actions = listOf(
+            ActionSheetDialog.Action(getString(R.string.delete_for_everyone), destructive = true) {
+                deleteMessageForEveryone(message)
+            },
+            ActionSheetDialog.Action(getString(R.string.delete_for_me), destructive = true) {
+                deleteMessageForMe(message)
             }
-            .show()
+        )
+        if (rawX != null && rawY != null) {
+            ActionSheetDialog.showAtPoint(this, actions, rawX, rawY)
+        } else {
+            ActionSheetDialog.show(this, actions)
+        }
     }
 
     private fun collectMessageIdentityIds(message: ChatMessage, serverMessageId: String? = resolveServerMessageId(message.id)): Set<String> {
@@ -2976,160 +1718,50 @@ class ChatActivity : AppCompatActivity() {
         animateMessageEvaporation(message) {
             idsToHide.forEach { AppContainer.sessionStore.hideMessage(chatId, it) }
             hiddenMessageIds = AppContainer.sessionStore.hiddenMessageIds(chatId)
-            val replyTargetId = replyTargetMessage?.id
-            val replyServerMessageId = resolveServerMessageId(replyTargetId)
-            if (replyTargetId == message.id || (serverMessageId != null && replyServerMessageId == serverMessageId)) {
-                clearReplyTarget()
-            }
+            replyController.clearIfMatches(message, serverMessageId)
             submitVisibleMessages(mergeMessagesForDisplay())
             Toast.makeText(this, getString(R.string.message_deleted_for_me), Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun setReplyTarget(message: ChatMessage) {
-        if (isEditingMessage()) {
-            cancelInlineEdit()
-        }
-        replyTargetMessage = message
-        binding.replyContainer.isVisible = true
-        binding.tvReplyTitle.text = getString(R.string.replying_to, message.senderName)
-        binding.tvReplyText.text = replyPreviewText(message)
-        bindReplyTargetImage(replyPreviewImageUrl(message))
-        if (!isEmojiPanelActiveOrPending()) {
-            binding.etMessage.requestFocus()
-            showKeyboard()
-        }
+        replyController.setReplyTarget(message)
     }
 
     private fun clearReplyTarget() {
-        replyTargetMessage = null
-        binding.replyContainer.isVisible = false
-        binding.tvReplyTitle.text = ""
-        binding.tvReplyText.text = ""
-        clearReplyTargetImage()
+        replyController.clearReplyTarget()
     }
 
     private fun onReplyPreviewTap(message: ChatMessage) {
-        val targetId = message.replyToMessageId ?: return
-        val currentList = adapter?.currentList.orEmpty()
-        val targetIndex = currentList.indexOfFirst {
-            it.id == targetId || resolveServerMessageId(it.id) == targetId
-        }
-        if (targetIndex >= 0) {
-            val targetMessageId = currentList[targetIndex].id
-            binding.recyclerMessages.smoothScrollToPosition(targetIndex)
-            adapter?.highlightMessage(targetMessageId)
-            binding.recyclerMessages.postDelayed(
-                {
-                    val refreshedList = adapter?.currentList.orEmpty()
-                    val refreshIndex = refreshedList.indexOfFirst {
-                        it.id == targetId || resolveServerMessageId(it.id) == targetId
-                    }
-                    if (refreshIndex >= 0) {
-                        val refreshTargetId = refreshedList[refreshIndex].id
-                        binding.recyclerMessages.smoothScrollToPosition(refreshIndex)
-                        adapter?.highlightMessage(refreshTargetId)
-                    }
-                },
-                180L
-            )
-        } else {
-            Toast.makeText(this, "Source message not found", Toast.LENGTH_SHORT).show()
-        }
+        replyController.onReplyPreviewTap(message)
     }
 
     private fun replyPreviewText(message: ChatMessage): String {
-        return when (message.type) {
-            MessageType.VOICE -> VOICE_PREVIEW_TEXT
-            MessageType.IMAGE -> message.text.normalizeReplyPreviewText()
-                .takeIf { it.isNotBlank() && it != PHOTO_PREVIEW_TEXT }
-                ?: PHOTO_PREVIEW_TEXT
-            MessageType.VIDEO -> VIDEO_PREVIEW_TEXT
-            MessageType.TEXT -> message.text.normalizeReplyPreviewText().ifBlank { "..." }
-        }
-    }
-
-    private fun String.normalizeReplyPreviewText(): String {
-        return replace("\r\n", "\n")
-            .replace('\r', '\n')
-            .trim()
+        return replyController.replyPreviewText(message)
     }
 
     private fun replyPreviewImageUrl(message: ChatMessage): String? {
-        if (message.type != MessageType.IMAGE) return null
-        return resolveMessagePhotoUrls(message).firstOrNull()
+        return replyController.replyPreviewImageUrl(message)
     }
 
-    private fun bindReplyTargetImage(imageUrl: String?) {
-        val safeUrl = imageUrl?.trim().orEmpty()
-        if (safeUrl.isBlank()) {
-            clearReplyTargetImage()
-            binding.tvReplyText.isVisible = true
-            return
-        }
-        binding.tvReplyText.isVisible = shouldShowReplyTargetText()
-        binding.ivReplyImage.isVisible = true
-        ImageThumbnailLoader.bind(binding.ivReplyImage, safeUrl, dpToPx(84f))
-    }
-
-    private fun clearReplyTargetImage() {
-        binding.ivReplyImage.isVisible = false
-        binding.ivReplyImage.tag = null
-        binding.ivReplyImage.setImageDrawable(null)
-        binding.tvReplyText.isVisible = true
-    }
-
-    private fun shouldShowReplyTargetText(): Boolean {
-        val text = binding.tvReplyText.text?.toString()?.trim().orEmpty()
-        return text.isNotBlank() && text != PHOTO_PREVIEW_TEXT
+    private fun currentReplyTarget(): ChatMessage? {
+        return replyController.replyTargetMessage
     }
     private fun showChatMenu(anchor: View) {
-        val popup = PopupMenu(this, anchor)
-        if (isGroupChat) {
-            popup.menu.add(0, MENU_GROUP_INFO, 0, getString(R.string.chat_menu_group_info))
-            popup.menu.add(0, MENU_GROUP_ADD_USER, 1, getString(R.string.chat_menu_add_user))
-            popup.menu.add(0, MENU_GROUP_REMOVE_USER, 2, "Исключить участника")
-            popup.menu.add(0, MENU_GROUP_LEAVE, 3, "Покинуть группу")
+        val actions = if (isGroupChat) {
+            listOf(
+                ActionSheetDialog.Action(getString(R.string.chat_menu_group_info)) { showGroupInfo() },
+                ActionSheetDialog.Action(getString(R.string.chat_menu_add_user)) { showAddUserToGroupDialog() },
+                ActionSheetDialog.Action("Исключить участника", destructive = true) { showRemoveUserFromGroupDialog() },
+                ActionSheetDialog.Action("Покинуть группу", destructive = true) { confirmLeaveGroup() }
+            )
         } else {
-            popup.menu.add(0, MENU_CONTACT_INFO, 0, getString(R.string.chat_menu_contact_info))
-            popup.menu.add(0, MENU_SHARE_CONTACT, 1, getString(R.string.chat_menu_share_contact))
+            listOf(
+                ActionSheetDialog.Action(getString(R.string.chat_menu_contact_info)) { showContactInfo() },
+                ActionSheetDialog.Action(getString(R.string.chat_menu_share_contact)) { shareContact() }
+            )
         }
-        popup.setOnMenuItemClickListener { item ->
-            when (item.itemId) {
-                MENU_GROUP_INFO -> {
-                    showGroupInfo()
-                    true
-                }
-
-                MENU_GROUP_ADD_USER -> {
-                    showAddUserToGroupDialog()
-                    true
-                }
-
-                MENU_GROUP_REMOVE_USER -> {
-                    showRemoveUserFromGroupDialog()
-                    true
-                }
-
-                MENU_GROUP_LEAVE -> {
-                    confirmLeaveGroup()
-                    true
-                }
-
-                MENU_CONTACT_INFO -> {
-                    showContactInfo()
-                    true
-                }
-
-                MENU_SHARE_CONTACT -> {
-                    shareContact()
-                    true
-                }
-
-                else -> false
-            }
-        }
-        popup.show()
+        ActionSheetDialog.showAnchoredBelow(this, actions, anchor, alignEnd = true)
     }
 
     private fun showGroupInfo() {
@@ -3466,51 +2098,22 @@ class ChatActivity : AppCompatActivity() {
 
     private fun beginInlineMessageEdit(message: ChatMessage) {
         val serverMessageId = resolveServerMessageId(message.id).orEmpty().ifBlank { message.id }
-        inlineEditState = InlineEditState(
+        inlineEditController.begin(
             message = message,
-            serverMessageId = serverMessageId
+            serverMessageId = serverMessageId,
+            emojiVisible = binding.emojiContainer.isVisible
         )
-        clearReplyTarget()
-        selectedPhotoUris.clear()
-        removedEditedPhotoUrls.clear()
-        if (binding.emojiContainer.isVisible) {
-            hideEmojiPanel(showKeyboard = true)
-        }
-
-        binding.etMessage.setText(
-            message.text.takeIf {
-                it.isNotBlank() && !(message.type == MessageType.IMAGE && it.trim() == PHOTO_PREVIEW_TEXT)
-            }.orEmpty()
-        )
-        binding.etMessage.setSelection(binding.etMessage.text?.length ?: 0)
-        updateInlineEditUi()
-        updatePhotoDraftUi()
-        updateComposerActionState()
-        binding.etMessage.requestFocus()
-        showKeyboard()
     }
 
     private fun cancelInlineEdit() {
-        if (!isEditingMessage()) return
-        inlineEditState = null
-        selectedPhotoUris.clear()
-        removedEditedPhotoUrls.clear()
-        pendingPhotoSelectionTarget = PhotoSelectionTarget.COMPOSE
-        binding.etMessage.text?.clear()
-        updateInlineEditUi()
-        updatePhotoDraftUi()
-        updateComposerActionState()
+        if (inlineEditController.cancel()) {
+            pendingPhotoSelectionTarget = PhotoSelectionTarget.COMPOSE
+        }
     }
 
     private fun finishInlineEdit() {
-        inlineEditState = null
-        selectedPhotoUris.clear()
-        removedEditedPhotoUrls.clear()
+        inlineEditController.finish()
         pendingPhotoSelectionTarget = PhotoSelectionTarget.COMPOSE
-        binding.etMessage.text?.clear()
-        updateInlineEditUi()
-        updatePhotoDraftUi()
-        updateComposerActionState()
     }
 
     private fun applyEditedPhotoSelection(uris: List<Uri>) {
@@ -3540,10 +2143,7 @@ class ChatActivity : AppCompatActivity() {
             newText = normalizedText,
             replacementPhotoSources = replacementPhotoSources
         )
-        pendingEditedMessages[message.id] = PendingEditedMessage(
-            serverMessageId = serverMessageId,
-            replacement = optimisticMessage
-        )
+        optimisticMessageStore.putPendingEditedMessage(message.id, serverMessageId, optimisticMessage)
         submitVisibleMessages(mergeMessagesForDisplay())
 
         try {
@@ -3602,13 +2202,14 @@ class ChatActivity : AppCompatActivity() {
                 )
             }
 
-            pendingEditedMessages[message.id] = PendingEditedMessage(
+            optimisticMessageStore.putPendingEditedMessage(
+                messageId = message.id,
                 serverMessageId = serverMessageId,
                 replacement = confirmedMessage.copy(id = message.id)
             )
             submitVisibleMessages(mergeMessagesForDisplay())
         } catch (throwable: Throwable) {
-            pendingEditedMessages.remove(message.id)
+            optimisticMessageStore.removePendingEditedMessage(message.id)
             submitVisibleMessages(mergeMessagesForDisplay())
             throw throwable
         }
@@ -3619,27 +2220,7 @@ class ChatActivity : AppCompatActivity() {
         newText: String,
         replacementPhotoSources: List<String>?
     ): ChatMessage {
-        return when (message.type) {
-            MessageType.IMAGE -> {
-                val photoUrls = replacementPhotoSources
-                    ?.map { it.trim() }
-                    ?.filter { it.isNotBlank() }
-                    ?.takeIf { it.isNotEmpty() }
-                    ?: resolveMessagePhotoUrls(message)
-                message.copy(
-                    text = newText,
-                    imageUrl = photoUrls.firstOrNull(),
-                    imageUrls = photoUrls,
-                    imageWidths = message.imageWidths,
-                    imageHeights = message.imageHeights,
-                    edited = message.edited
-                )
-            }
-            else -> message.copy(
-                text = newText,
-                edited = message.edited
-            )
-        }
+        return optimisticMessageStore.buildOptimisticEditedMessage(message, newText, replacementPhotoSources)
     }
 
     private fun refreshGroupInfoSilently() {
@@ -3765,16 +2346,6 @@ class ChatActivity : AppCompatActivity() {
         finish()
     }
 
-    private enum class RecordMode {
-        VOICE,
-        VIDEO
-    }
-
-    private enum class RecordingType {
-        VOICE,
-        VIDEO
-    }
-
     private enum class PhotoSelectionTarget {
         COMPOSE,
         EDIT
@@ -3791,81 +2362,16 @@ class ChatActivity : AppCompatActivity() {
         const val EXTRA_CHAT_PEER_DISPLAY_NAME = "extra_chat_peer_display_name"
         const val EXTRA_CHAT_AVATAR_URL = "extra_chat_avatar_url"
 
-        private const val MENU_CONTACT_INFO = 1001
-        private const val MENU_SHARE_CONTACT = 1002
-        private const val MENU_GROUP_INFO = 1003
-        private const val MENU_GROUP_ADD_USER = 1004
-        private const val MENU_GROUP_REMOVE_USER = 1005
-        private const val MENU_GROUP_LEAVE = 1006
         private const val VOICE_PREVIEW_TEXT = "\uD83C\uDFA4 Voice message"
         private const val PHOTO_PREVIEW_TEXT = "\uD83D\uDCF7 \u0424\u043E\u0442\u043E"
         private const val VIDEO_PREVIEW_TEXT = "\uD83C\uDFA5 \u0412\u0438\u0434\u0435\u043E"
         private const val MAX_PHOTO_DRAFTS = 10
-        private const val MAX_VOICE_RECORD_DURATION_SEC = 600
-        private const val MAX_VIDEO_RECORD_DURATION_SEC = 60
         private const val SWIPE_REPLY_MAX_SHIFT_FRACTION = 0.36f
         private const val SWIPE_REPLY_TRIGGER_FRACTION = 0.22f
         private const val SWIPE_BACK_FINISH_FRACTION = 0.32f
         private const val INITIAL_LOADING_INDICATOR_DELAY_MS = 450L
-        private const val DEFAULT_EMOJI_PANEL_HEIGHT_DP = 248f
-        private const val MIN_KEYBOARD_HEIGHT_TRACK_PX = 120
-        private const val KEYBOARD_TRANSITION_COMPLETION_GAP_DP = 12f
-        private const val KEYBOARD_INSET_SMALL_STEP_DP = 2f
-        private const val KEYBOARD_INSET_ANIMATION_TRIGGER_DP = 8f
-        private const val KEYBOARD_INSET_ANIMATION_MS = 180L
-        private const val EMOJI_GRID_SPAN_COUNT = 8
-        private const val EMOJI_GRID_HORIZONTAL_SPACING_DP = 6f
-        private const val EMOJI_GRID_VERTICAL_SPACING_DP = 4f
-        private const val EMOJI_OPEN_FALLBACK_DELAY_MS = 220L
-        private const val KEYBOARD_HIDE_EMOJI_FALLBACK_DELAY_MS = 280L
-        private const val EMOJI_PANEL_HEIGHT_ANIMATION_MS = 180L
-        private const val UI_PREFS_NAME = "chat_ui_state"
-        private const val PREF_LAST_KEYBOARD_HEIGHT_PX = "pref_last_keyboard_height_px"
     }
 
-    private class EmojiGridSpacingDecoration(
-        private val spanCount: Int,
-        private val horizontalSpacingPx: Int,
-        private val verticalSpacingPx: Int
-    ) : RecyclerView.ItemDecoration() {
-
-        override fun getItemOffsets(
-            outRect: Rect,
-            view: View,
-            parent: RecyclerView,
-            state: RecyclerView.State
-        ) {
-            val position = parent.getChildAdapterPosition(view)
-            if (position == RecyclerView.NO_POSITION) return
-            val column = position % spanCount
-            outRect.left = horizontalSpacingPx * column / spanCount
-            outRect.right = horizontalSpacingPx - (horizontalSpacingPx * (column + 1) / spanCount)
-            outRect.top = if (position < spanCount) 0 else verticalSpacingPx
-            outRect.bottom = 0
-        }
-    }
-
-    private data class ViewportAnchor(
-        val messageId: String?,
-        val index: Int,
-        val offsetPx: Int
-    )
-
-    private data class PendingEditedMessage(
-        val serverMessageId: String,
-        val replacement: ChatMessage
-    )
-
-    private data class InlineEditState(
-        val message: ChatMessage,
-        val serverMessageId: String
-    )
-
-    private data class PhotoDraftPreview(
-        val source: String,
-        val existingUrl: String?,
-        val selectedUriIndex: Int?
-    )
 }
 
 private data class PhotoDraftUpload(

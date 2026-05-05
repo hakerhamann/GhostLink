@@ -100,52 +100,6 @@
             </com.google.android.material.textfield.TextInputLayout>
 
             <com.google.android.material.textfield.TextInputLayout
-                android:id="@+id/inputServerLayout"
-                style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                app:boxBackgroundColor="#16241C"
-                app:boxStrokeColor="@color/ghost_neon_soft"
-                app:boxStrokeWidth="1dp"
-                app:boxStrokeWidthFocused="2dp"
-                app:hintTextColor="@color/ghost_text_secondary">
-
-                <AutoCompleteTextView
-                    android:id="@+id/acServerSelector"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="@string/server_select_hint"
-                    android:inputType="none"
-                    android:paddingEnd="12dp"
-                    android:textColor="@color/ghost_text_primary"
-                    android:textColorHint="@color/ghost_text_secondary" />
-            </com.google.android.material.textfield.TextInputLayout>
-
-            <com.google.android.material.textfield.TextInputLayout
-                android:id="@+id/inputCustomServerLayout"
-                style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:visibility="gone"
-                app:boxBackgroundColor="#16241C"
-                app:boxStrokeColor="@color/ghost_neon_soft"
-                app:boxStrokeWidth="1dp"
-                app:boxStrokeWidthFocused="2dp"
-                app:hintTextColor="@color/ghost_text_secondary">
-
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/etCustomServerUrl"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="@string/server_hint"
-                    android:inputType="textUri"
-                    android:textColor="@color/ghost_text_primary"
-                    android:textColorHint="@color/ghost_text_secondary" />
-            </com.google.android.material.textfield.TextInputLayout>
-
-            <com.google.android.material.textfield.TextInputLayout
                 android:id="@+id/inputLoginLayout"
                 style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
                 android:layout_width="match_parent"
