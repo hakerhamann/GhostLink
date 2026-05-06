@@ -38,7 +38,7 @@ class RoundVideoProgressView @JvmOverloads constructor(
         super.onDraw(canvas)
         val size = min(width, height).toFloat()
         if (size <= 0f) return
-        val strokeWidth = (size * 0.045f).coerceAtLeast(3f)
+        val strokeWidth = (size * 0.022f).coerceAtLeast(2f)
         trackPaint.strokeWidth = strokeWidth
         progressPaint.strokeWidth = strokeWidth
         val inset = strokeWidth / 2f

@@ -103,6 +103,15 @@ internal class ChatOptimisticMessageStore(
         }
     }
 
+    fun updateOverlayUploadProgress(localId: String, progress: Float?): Boolean {
+        val index = localOverlayMessages.indexOfFirst { it.id == localId }
+        if (index < 0) return false
+        val sanitized = progress?.coerceIn(0f, 1f)
+        if (localOverlayMessages[index].uploadProgress == sanitized) return false
+        localOverlayMessages[index] = localOverlayMessages[index].copy(uploadProgress = sanitized)
+        return true
+    }
+
     fun markOverlayMessageFailed(localId: String) {
         localToServerMessageIds.remove(localId)
         val index = localOverlayMessages.indexOfFirst { it.id == localId }
@@ -302,6 +311,7 @@ internal class ChatOptimisticMessageStore(
             first.imageHeights == second.imageHeights &&
             first.videoUrl == second.videoUrl &&
             first.localVideoPath == second.localVideoPath &&
+            first.uploadProgress == second.uploadProgress &&
             first.videoDurationSec == second.videoDurationSec &&
             first.replyToMessageId == second.replyToMessageId &&
             first.replyToSenderName == second.replyToSenderName &&

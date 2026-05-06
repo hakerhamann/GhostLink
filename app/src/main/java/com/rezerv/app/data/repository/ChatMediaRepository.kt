@@ -20,8 +20,18 @@ internal class ChatMediaRepository(
             ?: response.optString("fileName").ifBlank { throw IllegalStateException("Photo upload failed") }
     }
 
-    suspend fun uploadVideo(chatId: String, videoBytes: ByteArray, fileName: String): String {
-        val response = apiClient.uploadVideo(chatId = chatId, videoBytes = videoBytes, fileName = fileName)
+    suspend fun uploadVideo(
+        chatId: String,
+        videoBytes: ByteArray,
+        fileName: String,
+        onProgress: ((Float) -> Unit)? = null
+    ): String {
+        val response = apiClient.uploadVideo(
+            chatId = chatId,
+            videoBytes = videoBytes,
+            fileName = fileName,
+            onProgress = onProgress
+        )
         return response.optString("videoUrl").ifBlank { null }
             ?: response.optString("fileName").ifBlank { throw IllegalStateException("Video upload failed") }
     }

@@ -79,13 +79,15 @@ class ApiClient(
         chatId: String,
         videoBytes: ByteArray,
         fileName: String = "video.mp4",
-        contentType: String = "video/mp4"
+        contentType: String = "video/mp4",
+        onProgress: ((Float) -> Unit)? = null
     ): JSONObject = uploadMultipartBinary(
         path = "/api/chats/$chatId/video",
         fieldName = "video",
         payloadBytes = videoBytes,
         fileName = fileName,
-        contentType = contentType
+        contentType = contentType,
+        onProgress = onProgress
     )
 
     private suspend fun uploadMultipartBinary(
@@ -93,7 +95,8 @@ class ApiClient(
         fieldName: String,
         payloadBytes: ByteArray,
         fileName: String,
-        contentType: String
+        contentType: String,
+        onProgress: ((Float) -> Unit)? = null
     ): JSONObject =
         withContext(Dispatchers.IO) {
             try {
@@ -119,7 +122,13 @@ class ApiClient(
                     output.writeBytes("--$boundary\r\n")
                     output.writeBytes("Content-Disposition: form-data; name=\"$fieldName\"; filename=\"$fileName\"\r\n")
                     output.writeBytes("Content-Type: $contentType\r\n\r\n")
-                    output.write(payloadBytes)
+                    var offset = 0
+                    while (offset < payloadBytes.size) {
+                        val count = minOf(UPLOAD_CHUNK_BYTES, payloadBytes.size - offset)
+                        output.write(payloadBytes, offset, count)
+                        offset += count
+                        onProgress?.invoke(offset.toFloat() / payloadBytes.size.toFloat())
+                    }
                     output.writeBytes("\r\n--$boundary--\r\n")
                     output.flush()
                 }
@@ -205,5 +214,9 @@ class ApiClient(
         return ApiException(statusCode = 0, message = "Нет соединения с сервером").also {
             it.initCause(cause)
         }
+    }
+
+    private companion object {
+        private const val UPLOAD_CHUNK_BYTES = 64 * 1024
     }
 }

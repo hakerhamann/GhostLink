@@ -3,6 +3,9 @@ package com.rezerv.app.chat
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaMuxer
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.Handler
@@ -25,9 +28,14 @@ import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
+import androidx.lifecycle.lifecycleScope
 import com.google.common.util.concurrent.ListenableFuture
 import com.rezerv.app.databinding.ActivityChatBinding
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.ByteBuffer
 import kotlin.math.abs
 
 internal class ChatRecordingController(
@@ -61,6 +69,7 @@ internal class ChatRecordingController(
     private var isVideoRecording: Boolean = false
     private var pendingVideoSendAfterStop: Boolean = false
     private var pendingCameraSwitchAfterFinalize: Boolean = false
+    private var videoSegments = mutableListOf<File>()
     private val recordingUiHandler = Handler(Looper.getMainLooper())
 
     init {
@@ -194,7 +203,9 @@ internal class ChatRecordingController(
     fun switchVideoCamera() {
         if (currentRecordMode != RecordMode.VIDEO) return
         if (isVideoRecording || videoRecording != null) {
-            Toast.makeText(activity, "Переключение камеры во время записи пока недоступно", Toast.LENGTH_SHORT).show()
+            pendingCameraSwitchAfterFinalize = true
+            pendingVideoSendAfterStop = false
+            videoRecording?.stop()
             return
         }
         if (!switchVideoCameraNow()) {
@@ -397,7 +408,12 @@ internal class ChatRecordingController(
         if (isAnyRecordingInProgress() || !voiceButtonPressed) return
         hideEmojiPanel()
         binding.videoRecordingContainer.isVisible = true
+        videoSegments.clear()
+        startVideoSegment(resetTimer = true)
+    }
 
+    @SuppressLint("MissingPermission")
+    private fun startVideoSegment(resetTimer: Boolean) {
         ensureVideoCapture(
             onReady = { capture ->
                 val tempFile = File(activity.cacheDir, "video_${System.currentTimeMillis()}.mp4")
@@ -411,11 +427,16 @@ internal class ChatRecordingController(
                     .start(ContextCompat.getMainExecutor(activity)) { event ->
                         when (event) {
                             is VideoRecordEvent.Start -> {
-                                recordingStartedAtMs = System.currentTimeMillis()
+                                if (resetTimer || recordingStartedAtMs <= 0L) {
+                                    recordingStartedAtMs = System.currentTimeMillis()
+                                }
                                 isVideoRecording = true
                                 recordingUiHandler.removeCallbacks(recordingTicker)
                                 recordingUiHandler.post(recordingTicker)
-                                updateRecordingUi(recording = true, elapsedSec = 0)
+                                val elapsedSec = ((System.currentTimeMillis() - recordingStartedAtMs) / 1000L)
+                                    .toInt()
+                                    .coerceAtLeast(0)
+                                updateRecordingUi(recording = true, elapsedSec = elapsedSec)
                             }
 
                             is VideoRecordEvent.Finalize -> {
@@ -439,6 +460,8 @@ internal class ChatRecordingController(
             isVideoRecording = false
             if (!send) {
                 runCatching { videoRecordFile?.delete() }
+                videoSegments.forEach { segment -> runCatching { segment.delete() } }
+                videoSegments.clear()
                 videoRecordFile = null
             }
             recordingStartedAtMs = 0L
@@ -456,44 +479,167 @@ internal class ChatRecordingController(
         val file = videoRecordFile
         val shouldSend = pendingVideoSendAfterStop
         val durationSec = ((System.currentTimeMillis() - recordingStartedAtMs) / 1000L).toInt().coerceAtLeast(0)
+        val shouldSwitchCamera = pendingCameraSwitchAfterFinalize
 
         isVideoRecording = false
         recordingUiHandler.removeCallbacks(recordingTicker)
         videoRecording = null
         videoRecordFile = null
-        recordingStartedAtMs = 0L
-        updateRecordingUi(recording = false, elapsedSec = 0)
 
-        if (pendingCameraSwitchAfterFinalize) {
+        if (shouldSwitchCamera) {
             pendingCameraSwitchAfterFinalize = false
-            runCatching { file?.delete() }
+            if (event.hasError() || file == null || !file.exists() || file.length() <= 0L) {
+                runCatching { file?.delete() }
+                deleteVideoSegments()
+                recordingStartedAtMs = 0L
+                updateRecordingUi(recording = false, elapsedSec = 0)
+                Toast.makeText(activity, "Ошибка видеозаписи", Toast.LENGTH_SHORT).show()
+                return
+            }
+            videoSegments += file
             if (!switchVideoCameraNow()) {
+                deleteVideoSegments()
+                recordingStartedAtMs = 0L
+                updateRecordingUi(recording = false, elapsedSec = 0)
                 Toast.makeText(activity, "Не удалось переключить камеру", Toast.LENGTH_SHORT).show()
+                return
             }
             if (voiceButtonPressed) {
-                startVideoRecordingInternal()
+                startVideoSegment(resetTimer = false)
+            } else {
+                recordingStartedAtMs = 0L
+                updateRecordingUi(recording = false, elapsedSec = 0)
             }
             return
         }
 
+        recordingStartedAtMs = 0L
+        updateRecordingUi(recording = false, elapsedSec = 0)
+
         if (event.hasError()) {
             runCatching { file?.delete() }
+            deleteVideoSegments()
             Toast.makeText(activity, "Ошибка видеозаписи", Toast.LENGTH_SHORT).show()
             return
         }
 
         if (!shouldSend) {
             runCatching { file?.delete() }
+            deleteVideoSegments()
             return
         }
 
         if (file == null || !file.exists() || file.length() <= 0L) {
             runCatching { file?.delete() }
+            deleteVideoSegments()
             Toast.makeText(activity, "Не удалось сохранить видеосообщение", Toast.LENGTH_SHORT).show()
             return
         }
 
-        sendVideo(file, durationSec.coerceAtMost(MAX_VIDEO_RECORD_DURATION_SEC))
+        videoSegments += file
+        finalizeVideoSegmentsForSend(durationSec.coerceAtMost(MAX_VIDEO_RECORD_DURATION_SEC))
+    }
+
+    private fun finalizeVideoSegmentsForSend(durationSec: Int) {
+        val segments = videoSegments.toList()
+        videoSegments.clear()
+        if (segments.isEmpty()) {
+            Toast.makeText(activity, "Не удалось сохранить видеосообщение", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (segments.size == 1) {
+            sendVideo(segments.first(), durationSec)
+            return
+        }
+        activity.lifecycleScope.launch {
+            val mergedFile = withContext(Dispatchers.IO) {
+                val output = File(activity.cacheDir, "video_merged_${System.currentTimeMillis()}.mp4")
+                runCatching {
+                    concatMp4Segments(segments, output)
+                    output.takeIf { it.exists() && it.length() > 0L }
+                }.onFailure {
+                    output.delete()
+                }.getOrNull()
+            }
+            segments.forEach { segment -> runCatching { segment.delete() } }
+            if (mergedFile == null) {
+                Toast.makeText(activity, "Не удалось собрать видеосообщение", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            sendVideo(mergedFile, durationSec)
+        }
+    }
+
+    private fun deleteVideoSegments() {
+        videoSegments.forEach { segment -> runCatching { segment.delete() } }
+        videoSegments.clear()
+    }
+
+    private fun concatMp4Segments(segments: List<File>, output: File) {
+        require(segments.isNotEmpty())
+        val firstExtractor = MediaExtractor()
+        val trackIndexMap = mutableMapOf<Int, Int>()
+        try {
+            firstExtractor.setDataSource(segments.first().absolutePath)
+            val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            try {
+                for (trackIndex in 0 until firstExtractor.trackCount) {
+                    val format = firstExtractor.getTrackFormat(trackIndex)
+                    trackIndexMap[trackIndex] = muxer.addTrack(format)
+                }
+                muxer.start()
+                val buffer = ByteBuffer.allocate(1024 * 1024)
+                val info = MediaCodec.BufferInfo()
+                val trackOffsetsUs = LongArray(firstExtractor.trackCount)
+                segments.forEach { segment ->
+                    appendSegmentToMuxer(segment, muxer, trackIndexMap, trackOffsetsUs, buffer, info)
+                }
+                muxer.stop()
+            } finally {
+                runCatching { muxer.release() }
+            }
+        } finally {
+            firstExtractor.release()
+        }
+    }
+
+    private fun appendSegmentToMuxer(
+        segment: File,
+        muxer: MediaMuxer,
+        trackIndexMap: Map<Int, Int>,
+        trackOffsetsUs: LongArray,
+        buffer: ByteBuffer,
+        info: MediaCodec.BufferInfo
+    ) {
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(segment.absolutePath)
+            for (trackIndex in 0 until extractor.trackCount) {
+                val muxerTrack = trackIndexMap[trackIndex] ?: continue
+                extractor.selectTrack(trackIndex)
+                var lastSampleTimeUs = 0L
+                while (true) {
+                    val sampleTrack = extractor.sampleTrackIndex
+                    if (sampleTrack != trackIndex) break
+                    buffer.clear()
+                    val sampleSize = extractor.readSampleData(buffer, 0)
+                    if (sampleSize < 0) break
+                    info.set(
+                        0,
+                        sampleSize,
+                        extractor.sampleTime.coerceAtLeast(0L) + trackOffsetsUs[trackIndex],
+                        extractor.sampleFlags
+                    )
+                    muxer.writeSampleData(muxerTrack, buffer, info)
+                    lastSampleTimeUs = info.presentationTimeUs
+                    extractor.advance()
+                }
+                trackOffsetsUs[trackIndex] = lastSampleTimeUs + 1_000L
+                extractor.unselectTrack(trackIndex)
+            }
+        } finally {
+            extractor.release()
+        }
     }
 
     private fun ensureVideoCapture(
@@ -567,6 +713,9 @@ internal class ChatRecordingController(
         videoRecording?.stop()
         videoRecording = null
         pendingCameraSwitchAfterFinalize = false
+        runCatching { videoRecordFile?.delete() }
+        videoRecordFile = null
+        deleteVideoSegments()
         runCatching { cameraProvider?.unbindAll() }
         videoPreviewUseCase = null
         videoCapture = null

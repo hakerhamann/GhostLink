@@ -7,22 +7,31 @@ import android.widget.TextView
 import androidx.core.view.isVisible
 import com.rezerv.app.data.model.ChatMessage
 import com.rezerv.app.data.model.MessageSendState
+import com.rezerv.app.data.model.MessageType
 import com.rezerv.app.ui.widget.RoundVideoProgressView
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 internal object RoundVideoMessageBinder {
+    private val prefetchScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     fun bind(
         container: View,
         textureView: TextureView,
         thumbnailView: ImageView,
         placeholderView: View,
         progressView: RoundVideoProgressView,
+        uploadProgressView: RoundVideoProgressView,
         playButton: TextView,
         durationView: TextView,
         item: ChatMessage,
         playback: RoundVideoPlaybackState,
         onToggleVideo: (TextureView) -> Unit,
         onAttachTexture: (TextureView) -> Unit,
-        onDetachTexture: (TextureView) -> Unit
+        onDetachTexture: (TextureView) -> Unit,
+        onCachedVideoReady: (String) -> Unit
     ) {
         val videoUrl = item.videoUrl?.trim().orEmpty()
         val localVideoPath = item.localVideoPath?.trim().orEmpty()
@@ -33,6 +42,7 @@ internal object RoundVideoMessageBinder {
                 thumbnailView = thumbnailView,
                 placeholderView = placeholderView,
                 progressView = progressView,
+                uploadProgressView = uploadProgressView,
                 playButton = playButton,
                 durationView = durationView,
                 onDetachTexture = onDetachTexture
@@ -44,7 +54,9 @@ internal object RoundVideoMessageBinder {
         container.isVisible = true
         container.alpha = 1f
         placeholderView.isVisible = true
-        progressView.isVisible = true
+        val isUploading = item.type == MessageType.VIDEO && item.sendState == MessageSendState.SENDING
+        progressView.isVisible = !isUploading
+        uploadProgressView.isVisible = isUploading
         playButton.isVisible = !playback.isPlaying || playback.showTransientOverlay
         durationView.isVisible = false
         textureView.alpha = if (playback.isActive) 1f else 0f
@@ -59,10 +71,11 @@ internal object RoundVideoMessageBinder {
             else -> 0f
         }
         progressView.setProgressFraction(progressFraction)
+        uploadProgressView.setProgressFraction(item.uploadProgress ?: 0f)
 
         playButton.text = when {
             playback.isError -> "!"
-            playback.isDownloading || isPending || playback.isPreparing -> "\u2026"
+            isUploading || playback.isDownloading || isPending || playback.isPreparing -> "\u2026"
             playback.isPlaying -> ""
             else -> "\u25B6"
         }
@@ -76,6 +89,19 @@ internal object RoundVideoMessageBinder {
             .takeIf { it.isNotBlank() }
             ?: RoundVideoCache.getCachedFileIfExists(thumbnailView.context, videoUrl)?.absolutePath.orEmpty()
         RoundVideoThumbnailLoader.bind(thumbnailView, thumbnailSource)
+        if (
+            thumbnailSource.isBlank() &&
+            videoUrl.isNotBlank() &&
+            !videoUrl.startsWith("pending://") &&
+            item.sendState == MessageSendState.SENT &&
+            !playback.isDownloading
+        ) {
+            val context = thumbnailView.context.applicationContext
+            prefetchScope.launch {
+                val cached = RoundVideoCache.fileFor(context, videoUrl) { }
+                if (cached != null) onCachedVideoReady(item.id)
+            }
+        }
         if (playback.isActive) {
             onAttachTexture(textureView)
         } else {
@@ -96,6 +122,7 @@ internal object RoundVideoMessageBinder {
         thumbnailView: ImageView,
         placeholderView: View,
         progressView: RoundVideoProgressView,
+        uploadProgressView: RoundVideoProgressView,
         playButton: TextView,
         durationView: TextView,
         onDetachTexture: (TextureView) -> Unit
@@ -108,6 +135,8 @@ internal object RoundVideoMessageBinder {
         placeholderView.isVisible = true
         progressView.setProgressFraction(0f)
         progressView.isVisible = false
+        uploadProgressView.setProgressFraction(0f)
+        uploadProgressView.isVisible = false
         playButton.isVisible = false
         durationView.isVisible = false
         RoundVideoThumbnailLoader.clear(thumbnailView)

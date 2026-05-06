@@ -88,6 +88,7 @@ class MessageAdapter(
                 onToggleVideo = { textureView -> toggleRoundVideoPlayback(item, textureView) },
                 onAttachVideo = { textureView -> roundVideoPlayer.attachTexture(item, textureView) },
                 onDetachVideo = { textureView -> roundVideoPlayer.detachTexture(textureView) },
+                onCachedVideoReady = { id -> notifyMessageChanged(id) },
                 onIncomingAvatarTap = onIncomingAvatarTap,
                 onSenderNameTap = onSenderNameTap,
                 onIncomingMessageTap = onIncomingMessageTap,
@@ -108,6 +109,7 @@ class MessageAdapter(
                 onToggleVideo = { textureView -> toggleRoundVideoPlayback(item, textureView) },
                 onAttachVideo = { textureView -> roundVideoPlayer.attachTexture(item, textureView) },
                 onDetachVideo = { textureView -> roundVideoPlayer.detachTexture(textureView) },
+                onCachedVideoReady = { id -> notifyMessageChanged(id) },
                 onOwnMessageTap = onOwnMessageTap,
                 onReplyPreviewTap = onReplyPreviewTap,
                 onMessageImageTap = onMessageImageTap
@@ -325,6 +327,7 @@ class MessageAdapter(
             onToggleVideo: (TextureView) -> Unit,
             onAttachVideo: (TextureView) -> Unit,
             onDetachVideo: (TextureView) -> Unit,
+            onCachedVideoReady: (String) -> Unit,
             onIncomingAvatarTap: (ChatMessage) -> Unit,
             onSenderNameTap: (ChatMessage) -> Unit,
             onIncomingMessageTap: (ChatMessage, Float, Float) -> Unit,
@@ -417,13 +420,15 @@ class MessageAdapter(
                         thumbnailView = binding.ivVideoThumbnail,
                         placeholderView = binding.videoPlaceholder,
                         progressView = binding.videoProgress,
+                        uploadProgressView = binding.videoUploadProgress,
                         playButton = binding.tvVideoPlay,
                         durationView = binding.tvVideoDuration,
                         item = item,
                         playback = videoPlayback,
                         onToggleVideo = onToggleVideo,
                         onAttachTexture = onAttachVideo,
-                        onDetachTexture = onDetachVideo
+                        onDetachTexture = onDetachVideo,
+                        onCachedVideoReady = onCachedVideoReady
                     )
                 }
 
@@ -478,6 +483,7 @@ class MessageAdapter(
                 thumbnailView = binding.ivVideoThumbnail,
                 placeholderView = binding.videoPlaceholder,
                 progressView = binding.videoProgress,
+                uploadProgressView = binding.videoUploadProgress,
                 playButton = binding.tvVideoPlay,
                 durationView = binding.tvVideoDuration,
                 onDetachTexture = onDetachVideo
@@ -526,6 +532,7 @@ class MessageAdapter(
             onToggleVideo: (TextureView) -> Unit,
             onAttachVideo: (TextureView) -> Unit,
             onDetachVideo: (TextureView) -> Unit,
+            onCachedVideoReady: (String) -> Unit,
             onOwnMessageTap: (ChatMessage, Float, Float) -> Unit,
             onReplyPreviewTap: (ChatMessage) -> Unit,
             onMessageImageTap: (ChatMessage, Int, String) -> Unit
@@ -596,13 +603,15 @@ class MessageAdapter(
                         thumbnailView = binding.ivVideoThumbnail,
                         placeholderView = binding.videoPlaceholder,
                         progressView = binding.videoProgress,
+                        uploadProgressView = binding.videoUploadProgress,
                         playButton = binding.tvVideoPlay,
                         durationView = binding.tvVideoDuration,
                         item = item,
                         playback = videoPlayback,
                         onToggleVideo = onToggleVideo,
                         onAttachTexture = onAttachVideo,
-                        onDetachTexture = onDetachVideo
+                        onDetachTexture = onDetachVideo,
+                        onCachedVideoReady = onCachedVideoReady
                     )
                 }
 
@@ -660,6 +669,7 @@ class MessageAdapter(
                 thumbnailView = binding.ivVideoThumbnail,
                 placeholderView = binding.videoPlaceholder,
                 progressView = binding.videoProgress,
+                uploadProgressView = binding.videoUploadProgress,
                 playButton = binding.tvVideoPlay,
                 durationView = binding.tvVideoDuration,
                 onDetachTexture = onDetachVideo

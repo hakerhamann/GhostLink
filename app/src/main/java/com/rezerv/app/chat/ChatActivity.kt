@@ -49,6 +49,7 @@ import com.rezerv.app.chat.PhotoPreviewActivity
 import com.rezerv.app.profile.AvatarPreviewActivity
 import com.rezerv.app.profile.UserProfileActivity
 import com.rezerv.app.ui.adapters.MessageAdapter
+import com.rezerv.app.ui.adapters.RoundVideoCache
 import com.rezerv.app.ui.dialog.ActionSheetDialog
 import com.rezerv.app.util.AvatarLoader
 import com.rezerv.app.util.AvatarProcessor
@@ -675,6 +676,11 @@ class ChatActivity : AppCompatActivity() {
 
     private fun markOverlayMessageFailed(localId: String) {
         optimisticMessageStore.markOverlayMessageFailed(localId)
+        submitVisibleMessages(mergeMessagesForDisplay())
+    }
+
+    private fun updateOverlayUploadProgress(localId: String, progress: Float?) {
+        if (!optimisticMessageStore.updateOverlayUploadProgress(localId, progress)) return
         submitVisibleMessages(mergeMessagesForDisplay())
     }
 
@@ -1467,12 +1473,22 @@ class ChatActivity : AppCompatActivity() {
         clearReplyTarget()
 
         lifecycleScope.launch {
+            var cacheReady = false
+            var uploadSucceeded = false
             runCatching {
                 val videoUrl = AppContainer.chatRepository.uploadVideo(
                     chatId = chatId,
                     videoBytes = file.readBytes(),
-                    fileName = file.name
+                    fileName = file.name,
+                    onProgress = { progress ->
+                        lifecycleScope.launch {
+                            updateOverlayUploadProgress(optimisticMessage.id, progress)
+                        }
+                    }
                 )
+                updateOverlayUploadProgress(optimisticMessage.id, 1f)
+                cacheReady = RoundVideoCache.putFileForUrl(this@ChatActivity, videoUrl, file) != null
+                uploadSucceeded = true
                 AppContainer.chatRepository.sendVideoMessage(
                     chatId = chatId,
                     videoUrl = videoUrl,
@@ -1481,7 +1497,10 @@ class ChatActivity : AppCompatActivity() {
                     replyToMessageId = sanitizeReplyMessageId(replyTarget)
                 )
             }.onSuccess { confirmedMessage ->
-                markOverlayMessageSent(optimisticMessage.id, confirmedMessage)
+                markOverlayMessageSent(
+                    optimisticMessage.id,
+                    confirmedMessage.copy(localVideoPath = if (cacheReady) null else file.absolutePath)
+                )
                 MessageNotificationHelper.cancelChatNotification(this@ChatActivity, chatId)
             }.onFailure { throwable ->
                 markOverlayMessageFailed(optimisticMessage.id)
@@ -1492,7 +1511,9 @@ class ChatActivity : AppCompatActivity() {
                 ).show()
             }
 
-            runCatching { file.delete() }
+            if (cacheReady || !uploadSucceeded || !file.exists()) {
+                runCatching { file.delete() }
+            }
         }
     }
 

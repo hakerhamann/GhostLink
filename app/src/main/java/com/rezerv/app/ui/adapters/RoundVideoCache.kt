@@ -1,6 +1,7 @@
 package com.rezerv.app.ui.adapters
 
 import android.content.Context
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -8,11 +9,13 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 
 internal object RoundVideoCache {
     private const val CACHE_DIR = "round_video_cache"
     private const val MAX_BYTES = 512L * 1024L * 1024L
     private const val MAX_AGE_MS = 7L * 24L * 60L * 60L * 1000L
+    private val inFlight = ConcurrentHashMap<String, CompletableDeferred<File?>>()
 
     suspend fun fileFor(
         context: Context,
@@ -26,9 +29,39 @@ internal object RoundVideoCache {
             file.setLastModified(System.currentTimeMillis())
             return@withContext file
         }
+        val deferred = CompletableDeferred<File?>()
+        val existing = inFlight.putIfAbsent(safeUrl, deferred)
+        if (existing != null) return@withContext existing.await()
         trim(context.applicationContext)
-        download(safeUrl, file, onProgress)
-        if (file.exists() && file.length() > 0L) file else null
+        val result = runCatching {
+            download(safeUrl, file, onProgress)
+            if (file.exists() && file.length() > 0L) file else null
+        }.getOrNull()
+        deferred.complete(result)
+        inFlight.remove(safeUrl, deferred)
+        result
+    }
+
+    suspend fun putFileForUrl(context: Context, url: String, sourceFile: File): File? = withContext(Dispatchers.IO) {
+        val safeUrl = url.trim()
+        if (safeUrl.isBlank() || safeUrl.startsWith("pending://")) return@withContext null
+        if (!sourceFile.exists() || sourceFile.length() <= 0L) return@withContext null
+        val target = cacheFile(context.applicationContext, safeUrl)
+        val parent = target.parentFile ?: return@withContext null
+        parent.mkdirs()
+        val tmp = File(parent, "${target.name}.tmp")
+        runCatching {
+            sourceFile.copyTo(tmp, overwrite = true)
+            if (tmp.length() <= 0L) error("empty round video source")
+            if (!tmp.renameTo(target)) {
+                tmp.copyTo(target, overwrite = true)
+                tmp.delete()
+            }
+            target.setLastModified(System.currentTimeMillis())
+            target
+        }.onFailure {
+            tmp.delete()
+        }.getOrNull()
     }
 
     fun getCachedFileIfExists(context: Context, url: String): File? {

@@ -17,6 +17,7 @@ data class ChatMessage(
     val imageHeights: List<Int> = emptyList(),
     val videoUrl: String? = null,
     val localVideoPath: String? = null,
+    val uploadProgress: Float? = null,
     val videoDurationSec: Int = 0,
     val replyToMessageId: String? = null,
     val replyToSenderName: String? = null,

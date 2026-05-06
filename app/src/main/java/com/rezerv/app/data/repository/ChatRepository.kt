@@ -197,8 +197,13 @@ class ChatRepository(
         return mediaRepository.uploadPhoto(chatId, imageBytes, fileName)
     }
 
-    suspend fun uploadVideo(chatId: String, videoBytes: ByteArray, fileName: String): String {
-        return mediaRepository.uploadVideo(chatId, videoBytes, fileName)
+    suspend fun uploadVideo(
+        chatId: String,
+        videoBytes: ByteArray,
+        fileName: String,
+        onProgress: ((Float) -> Unit)? = null
+    ): String {
+        return mediaRepository.uploadVideo(chatId, videoBytes, fileName, onProgress)
     }
 
     suspend fun sendVoiceMessage(
