@@ -10,6 +10,7 @@
 - `MediaRecorder` setup/finalize for voice message temp files.
 - CameraX preview/capture setup, camera switching and video finalize handling.
 - Recording ticker, max video duration cutoff and recording status UI.
+- Circular CameraX video preview setup with recording progress ring.
 
 ## Compatibility Notes
 

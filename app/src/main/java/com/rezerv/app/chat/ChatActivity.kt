@@ -338,7 +338,7 @@ class ChatActivity : AppCompatActivity() {
         messagesListener = null
         swipeToReplyHelper?.attachToRecyclerView(null)
         swipeToReplyHelper = null
-        adapter?.releaseVoicePlayback()
+        adapter?.releasePlayback()
         emojiKeyboardController.destroy()
         if (::recordingController.isInitialized) {
             recordingController.release()
@@ -363,6 +363,7 @@ class ChatActivity : AppCompatActivity() {
         ActiveChatTracker.clear(chatId)
         messagesListener?.remove()
         messagesListener = null
+        adapter?.releasePlayback()
         stopAnyActiveRecording(send = false)
         super.onStop()
     }
@@ -557,8 +558,7 @@ class ChatActivity : AppCompatActivity() {
             onIncomingMessageTap = ::showIncomingMessageActions,
             onOwnMessageTap = ::showOwnMessageActions,
             onReplyPreviewTap = ::onReplyPreviewTap,
-            onMessageImageTap = ::openPhotoMessagePreview,
-            onMessageVideoTap = ::openVideoMessagePreview
+            onMessageImageTap = ::openPhotoMessagePreview
         )
         binding.recyclerMessages.adapter = adapter
         setupSwipeToReplyIfNeeded()

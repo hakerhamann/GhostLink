@@ -93,19 +93,42 @@
 
         <FrameLayout
             android:id="@+id/videoContainer"
-            android:layout_width="140dp"
-            android:layout_height="140dp"
+            android:layout_width="148dp"
+            android:layout_height="148dp"
             android:layout_marginBottom="4dp"
             android:visibility="gone">
 
-            <ImageView
-                android:id="@+id/ivVideoMessage"
+            <com.rezerv.app.ui.widget.CircularClipFrameLayout
+                android:id="@+id/videoCircleFrame"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:background="@drawable/bg_video_message_placeholder"
-                android:clipToOutline="true"
-                android:outlineProvider="background"
-                android:scaleType="centerCrop" />
+                android:layout_margin="5dp"
+                android:background="@drawable/bg_video_message_placeholder">
+
+                <View
+                    android:id="@+id/videoPlaceholder"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="@drawable/bg_video_message_placeholder" />
+
+                <ImageView
+                    android:id="@+id/ivVideoThumbnail"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:scaleType="centerCrop"
+                    android:visibility="gone" />
+
+                <android.view.TextureView
+                    android:id="@+id/videoTexture"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:alpha="0" />
+            </com.rezerv.app.ui.widget.CircularClipFrameLayout>
+
+            <com.rezerv.app.ui.widget.RoundVideoProgressView
+                android:id="@+id/videoProgress"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
 
             <TextView
                 android:id="@+id/tvVideoPlay"

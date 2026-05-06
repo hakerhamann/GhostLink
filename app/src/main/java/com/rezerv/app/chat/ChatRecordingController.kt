@@ -22,6 +22,7 @@ import androidx.camera.video.Recorder
 import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
+import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import com.google.common.util.concurrent.ListenableFuture
@@ -61,6 +62,12 @@ internal class ChatRecordingController(
     private var pendingVideoSendAfterStop: Boolean = false
     private var pendingCameraSwitchAfterFinalize: Boolean = false
     private val recordingUiHandler = Handler(Looper.getMainLooper())
+
+    init {
+        binding.videoRecordingPreview.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        binding.videoRecordingPreview.scaleType = PreviewView.ScaleType.FILL_CENTER
+        binding.videoRecordingProgress.setProgressFraction(0f)
+    }
 
     private val voiceLongPressRunnable = Runnable {
         if (!voiceButtonPressed || longPressTriggered || isAnyRecordingInProgress()) return@Runnable
@@ -223,6 +230,10 @@ internal class ChatRecordingController(
             binding.tvRecordingStatus.text = label
             binding.btnVoice.text = "■"
             binding.videoRecordingContainer.isVisible = isVideoRecording
+            binding.videoRecordingProgress.isVisible = isVideoRecording
+            binding.videoRecordingProgress.setProgressFraction(
+                elapsedSec.toFloat() / MAX_VIDEO_RECORD_DURATION_SEC.toFloat()
+            )
             binding.btnSwitchVideoCamera.isVisible = isVideoRecording
             binding.btnSend.isEnabled = false
             binding.btnEmoji.isEnabled = false
@@ -231,6 +242,8 @@ internal class ChatRecordingController(
         } else {
             binding.tvRecordingStatus.isVisible = false
             binding.videoRecordingContainer.isVisible = false
+            binding.videoRecordingProgress.isVisible = false
+            binding.videoRecordingProgress.setProgressFraction(0f)
             binding.btnSwitchVideoCamera.isVisible = false
             binding.btnVoice.text = if (currentRecordMode == RecordMode.VOICE) {
                 "\uD83C\uDFA4"
@@ -559,6 +572,8 @@ internal class ChatRecordingController(
         videoPreviewUseCase = null
         videoCapture = null
         binding.videoRecordingContainer.isVisible = false
+        binding.videoRecordingProgress.isVisible = false
+        binding.videoRecordingProgress.setProgressFraction(0f)
     }
 
     private enum class RecordMode {

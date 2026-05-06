@@ -5,6 +5,7 @@ import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.view.TextureView
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.core.view.isVisible
@@ -30,11 +31,11 @@ class MessageAdapter(
     private val onIncomingMessageTap: (ChatMessage, Float, Float) -> Unit,
     private val onOwnMessageTap: (ChatMessage, Float, Float) -> Unit,
     private val onReplyPreviewTap: (ChatMessage) -> Unit,
-    private val onMessageImageTap: (ChatMessage, Int, String) -> Unit,
-    private val onMessageVideoTap: (ChatMessage) -> Unit
+    private val onMessageImageTap: (ChatMessage, Int, String) -> Unit
 ) : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(DiffCallback) {
 
     private var recipientsCount: Int = initialRecipientsCount.coerceAtLeast(1)
+    private val roundVideoPlayer = RoundVideoPlayerController(::notifyMessageChanged)
     private var mediaPlayer: MediaPlayer? = null
     private var activeMessageId: String? = null
     private var preparingMessageId: String? = null
@@ -74,18 +75,22 @@ class MessageAdapter(
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         val item = getItem(position)
         val playbackState = playbackStateFor(item)
+        val videoPlaybackState = roundVideoPlayer.playbackStateFor(item)
         when (holder) {
             is IncomingViewHolder -> holder.bind(
                 item = item,
                 playback = playbackState,
+                videoPlayback = videoPlaybackState,
                 isGroupChat = isGroupChat,
                 onPlayVoice = { toggleVoicePlayback(item) },
+                onToggleVideo = { textureView -> toggleRoundVideoPlayback(item, textureView) },
+                onAttachVideo = { textureView -> roundVideoPlayer.attachTexture(item, textureView) },
+                onDetachVideo = { textureView -> roundVideoPlayer.stopIfBoundTexture(textureView) },
                 onIncomingAvatarTap = onIncomingAvatarTap,
                 onSenderNameTap = onSenderNameTap,
                 onIncomingMessageTap = onIncomingMessageTap,
                 onReplyPreviewTap = onReplyPreviewTap,
                 onMessageImageTap = onMessageImageTap,
-                onMessageVideoTap = onMessageVideoTap,
                 isHighlighted = highlightedMessageId == item.id
             )
 
@@ -96,11 +101,14 @@ class MessageAdapter(
                 isGroupChat = isGroupChat,
                 isHighlighted = highlightedMessageId == item.id,
                 playback = playbackState,
+                videoPlayback = videoPlaybackState,
                 onPlayVoice = { toggleVoicePlayback(item) },
+                onToggleVideo = { textureView -> toggleRoundVideoPlayback(item, textureView) },
+                onAttachVideo = { textureView -> roundVideoPlayer.attachTexture(item, textureView) },
+                onDetachVideo = { textureView -> roundVideoPlayer.stopIfBoundTexture(textureView) },
                 onOwnMessageTap = onOwnMessageTap,
                 onReplyPreviewTap = onReplyPreviewTap,
-                onMessageImageTap = onMessageImageTap,
-                onMessageVideoTap = onMessageVideoTap
+                onMessageImageTap = onMessageImageTap
             )
 
             is SystemViewHolder -> holder.bind(item)
@@ -121,6 +129,19 @@ class MessageAdapter(
                 pendingEntranceAnimationIds += message.id
             }
         }
+    }
+
+    override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
+        when (holder) {
+            is IncomingViewHolder -> holder.releaseRoundVideo(roundVideoPlayer)
+            is OutgoingViewHolder -> holder.releaseRoundVideo(roundVideoPlayer)
+        }
+        super.onViewRecycled(holder)
+    }
+
+    fun releasePlayback() {
+        releaseVoicePlayback()
+        roundVideoPlayer.release()
     }
 
     fun releaseVoicePlayback() {
@@ -191,6 +212,7 @@ class MessageAdapter(
 
         val previousActive = activeMessageId
         val previousPreparing = preparingMessageId
+        roundVideoPlayer.release()
         stopVoicePlayback(clearStateOnly = true)
 
         preparingMessageId = item.id
@@ -233,6 +255,12 @@ class MessageAdapter(
         }.onFailure {
             stopVoicePlayback()
         }
+    }
+
+    private fun toggleRoundVideoPlayback(item: ChatMessage, textureView: TextureView) {
+        if (item.type != MessageType.VIDEO) return
+        stopVoicePlayback()
+        roundVideoPlayer.toggle(item, textureView)
     }
 
     private fun stopVoicePlayback(clearStateOnly: Boolean = false) {
@@ -282,14 +310,17 @@ class MessageAdapter(
         fun bind(
             item: ChatMessage,
             playback: VoicePlaybackState,
+            videoPlayback: RoundVideoPlaybackState,
             isGroupChat: Boolean,
             onPlayVoice: () -> Unit,
+            onToggleVideo: (TextureView) -> Unit,
+            onAttachVideo: (TextureView) -> Unit,
+            onDetachVideo: (TextureView) -> Unit,
             onIncomingAvatarTap: (ChatMessage) -> Unit,
             onSenderNameTap: (ChatMessage) -> Unit,
             onIncomingMessageTap: (ChatMessage, Float, Float) -> Unit,
             onReplyPreviewTap: (ChatMessage) -> Unit,
             onMessageImageTap: (ChatMessage, Int, String) -> Unit,
-            onMessageVideoTap: (ChatMessage) -> Unit,
             isHighlighted: Boolean
         ) {
             binding.tvSender.text = item.senderName
@@ -338,8 +369,7 @@ class MessageAdapter(
                     binding.ivImageMessage.setOnClickListener(null)
                     binding.photoAlbumGrid.isVisible = false
                     binding.photoAlbumGrid.removeAllViews()
-                    binding.videoContainer.isVisible = false
-                    binding.videoContainer.setOnClickListener(null)
+                    clearRoundVideo(onDetachVideo)
                     MessageVoiceBinder.bind(
                         container = binding.voiceContainer,
                         playButton = binding.btnPlayVoice,
@@ -354,8 +384,7 @@ class MessageAdapter(
                 MessageType.IMAGE -> {
                     binding.voiceContainer.isVisible = false
                     binding.voiceContainer.setOnClickListener(null)
-                    binding.videoContainer.isVisible = false
-                    binding.videoContainer.setOnClickListener(null)
+                    clearRoundVideo(onDetachVideo)
                     MessagePhotoBinder.bind(
                         imageView = binding.ivImageMessage,
                         albumGrid = binding.photoAlbumGrid,
@@ -379,15 +408,19 @@ class MessageAdapter(
                     binding.photoAlbumGrid.removeAllViews()
                     binding.voiceContainer.isVisible = false
                     binding.voiceContainer.setOnClickListener(null)
-                    MessageVideoBinder.bind(
+                    RoundVideoMessageBinder.bind(
                         container = binding.videoContainer,
+                        textureView = binding.videoTexture,
+                        thumbnailView = binding.ivVideoThumbnail,
+                        placeholderView = binding.videoPlaceholder,
+                        progressView = binding.videoProgress,
+                        playButton = binding.tvVideoPlay,
                         durationView = binding.tvVideoDuration,
                         item = item,
-                        onMessageVideoTap = if (item.sendState == MessageSendState.SENT) {
-                            { onMessageVideoTap(item) }
-                        } else {
-                            null
-                        }
+                        playback = videoPlayback,
+                        onToggleVideo = onToggleVideo,
+                        onAttachTexture = onAttachVideo,
+                        onDetachTexture = onDetachVideo
                     )
                 }
 
@@ -398,8 +431,7 @@ class MessageAdapter(
                     binding.ivImageMessage.setImageDrawable(null)
                     binding.photoAlbumGrid.isVisible = false
                     binding.photoAlbumGrid.removeAllViews()
-                    binding.videoContainer.isVisible = false
-                    binding.videoContainer.setOnClickListener(null)
+                    clearRoundVideo(onDetachVideo)
                     binding.voiceContainer.isVisible = false
                     binding.voiceContainer.setOnClickListener(null)
                     binding.ivImageMessage.setOnClickListener(null)
@@ -431,6 +463,23 @@ class MessageAdapter(
                 onIncomingMessageTap(item, tapX, tapY)
             }
         }
+
+        fun releaseRoundVideo(controller: RoundVideoPlayerController) {
+            controller.stopIfBoundTexture(binding.videoTexture)
+        }
+
+        private fun clearRoundVideo(onDetachVideo: (TextureView) -> Unit) {
+            RoundVideoMessageBinder.clear(
+                container = binding.videoContainer,
+                textureView = binding.videoTexture,
+                thumbnailView = binding.ivVideoThumbnail,
+                placeholderView = binding.videoPlaceholder,
+                progressView = binding.videoProgress,
+                playButton = binding.tvVideoPlay,
+                durationView = binding.tvVideoDuration,
+                onDetachTexture = onDetachVideo
+            )
+        }
     }
 
     private class OutgoingViewHolder(
@@ -443,11 +492,14 @@ class MessageAdapter(
             isGroupChat: Boolean,
             isHighlighted: Boolean,
             playback: VoicePlaybackState,
+            videoPlayback: RoundVideoPlaybackState,
             onPlayVoice: () -> Unit,
+            onToggleVideo: (TextureView) -> Unit,
+            onAttachVideo: (TextureView) -> Unit,
+            onDetachVideo: (TextureView) -> Unit,
             onOwnMessageTap: (ChatMessage, Float, Float) -> Unit,
             onReplyPreviewTap: (ChatMessage) -> Unit,
-            onMessageImageTap: (ChatMessage, Int, String) -> Unit,
-            onMessageVideoTap: (ChatMessage) -> Unit
+            onMessageImageTap: (ChatMessage, Int, String) -> Unit
         ) {
             binding.messageBubble.setBackgroundResource(
                 if (isHighlighted) {
@@ -475,8 +527,7 @@ class MessageAdapter(
                     binding.ivImageMessage.setOnClickListener(null)
                     binding.photoAlbumGrid.isVisible = false
                     binding.photoAlbumGrid.removeAllViews()
-                    binding.videoContainer.isVisible = false
-                    binding.videoContainer.setOnClickListener(null)
+                    clearRoundVideo(onDetachVideo)
                     MessageVoiceBinder.bind(
                         container = binding.voiceContainer,
                         playButton = binding.btnPlayVoice,
@@ -492,8 +543,7 @@ class MessageAdapter(
                 MessageType.IMAGE -> {
                     binding.voiceContainer.isVisible = false
                     binding.voiceContainer.setOnClickListener(null)
-                    binding.videoContainer.isVisible = false
-                    binding.videoContainer.setOnClickListener(null)
+                    clearRoundVideo(onDetachVideo)
                     MessagePhotoBinder.bind(
                         imageView = binding.ivImageMessage,
                         albumGrid = binding.photoAlbumGrid,
@@ -517,11 +567,19 @@ class MessageAdapter(
                     binding.photoAlbumGrid.removeAllViews()
                     binding.voiceContainer.isVisible = false
                     binding.voiceContainer.setOnClickListener(null)
-                    MessageVideoBinder.bind(
+                    RoundVideoMessageBinder.bind(
                         container = binding.videoContainer,
+                        textureView = binding.videoTexture,
+                        thumbnailView = binding.ivVideoThumbnail,
+                        placeholderView = binding.videoPlaceholder,
+                        progressView = binding.videoProgress,
+                        playButton = binding.tvVideoPlay,
                         durationView = binding.tvVideoDuration,
                         item = item,
-                        onMessageVideoTap = { onMessageVideoTap(item) }
+                        playback = videoPlayback,
+                        onToggleVideo = onToggleVideo,
+                        onAttachTexture = onAttachVideo,
+                        onDetachTexture = onDetachVideo
                     )
                 }
 
@@ -532,8 +590,7 @@ class MessageAdapter(
                     binding.ivImageMessage.setImageDrawable(null)
                     binding.photoAlbumGrid.isVisible = false
                     binding.photoAlbumGrid.removeAllViews()
-                    binding.videoContainer.isVisible = false
-                    binding.videoContainer.setOnClickListener(null)
+                    clearRoundVideo(onDetachVideo)
                     binding.voiceContainer.isVisible = false
                     binding.voiceContainer.setOnClickListener(null)
                     binding.ivImageMessage.setOnClickListener(null)
@@ -567,6 +624,23 @@ class MessageAdapter(
                 }
                 onOwnMessageTap(item, tapX, tapY)
             }
+        }
+
+        fun releaseRoundVideo(controller: RoundVideoPlayerController) {
+            controller.stopIfBoundTexture(binding.videoTexture)
+        }
+
+        private fun clearRoundVideo(onDetachVideo: (TextureView) -> Unit) {
+            RoundVideoMessageBinder.clear(
+                container = binding.videoContainer,
+                textureView = binding.videoTexture,
+                thumbnailView = binding.ivVideoThumbnail,
+                placeholderView = binding.videoPlaceholder,
+                progressView = binding.videoProgress,
+                playButton = binding.tvVideoPlay,
+                durationView = binding.tvVideoDuration,
+                onDetachTexture = onDetachVideo
+            )
         }
 
     }

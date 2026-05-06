@@ -275,28 +275,38 @@
 
             <FrameLayout
                 android:id="@+id/videoRecordingContainer"
-                android:layout_width="96dp"
-                android:layout_height="96dp"
+                android:layout_width="124dp"
+                android:layout_height="124dp"
                 android:layout_gravity="center_horizontal"
                 android:layout_marginBottom="8dp"
                 android:visibility="gone">
 
-                <androidx.camera.view.PreviewView
-                    android:id="@+id/videoRecordingPreview"
+                <com.rezerv.app.ui.widget.CircularClipFrameLayout
+                    android:id="@+id/videoRecordingPreviewFrame"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
-                    android:background="@drawable/bg_video_message_circle"
-                    android:clipToOutline="true"
-                    android:outlineProvider="background" />
+                    android:layout_margin="5dp"
+                    android:background="@drawable/bg_video_message_circle">
+
+                    <androidx.camera.view.PreviewView
+                        android:id="@+id/videoRecordingPreview"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent" />
+                </com.rezerv.app.ui.widget.CircularClipFrameLayout>
+
+                <com.rezerv.app.ui.widget.RoundVideoProgressView
+                    android:id="@+id/videoRecordingProgress"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
 
                 <TextView
                     android:id="@+id/btnSwitchVideoCamera"
-                    android:layout_width="28dp"
-                    android:layout_height="28dp"
+                    android:layout_width="34dp"
+                    android:layout_height="34dp"
                     android:layout_gravity="bottom|end"
-                    android:layout_marginEnd="3dp"
-                    android:layout_marginBottom="3dp"
-                    android:background="@drawable/bg_input_field"
+                    android:layout_marginEnd="2dp"
+                    android:layout_marginBottom="2dp"
+                    android:background="@drawable/bg_video_play_button"
                     android:gravity="center"
                     android:text="&#x21BB;"
                     android:textColor="@color/ghost_text_primary"

@@ -40,16 +40,28 @@ hot_files:
     lines: 134
   - path: app/src/main/java/com/rezerv/app/chat/ChatRecordingController.kt
     summary: codex/summaries/ChatRecordingController.md
-    lines: 578
+    lines: 542
   - path: app/src/main/java/com/rezerv/app/ui/adapters/MessageAdapter.kt
     summary: codex/summaries/MessageAdapter.md
-    lines: 574
+    lines: 632
   - path: app/src/main/java/com/rezerv/app/ui/adapters/MessageVoiceBinder.kt
     summary: codex/summaries/MessageVoiceBinder.md
     lines: 74
-  - path: app/src/main/java/com/rezerv/app/ui/adapters/MessageVideoBinder.kt
-    summary: codex/summaries/MessageVideoBinder.md
-    lines: 31
+  - path: app/src/main/java/com/rezerv/app/ui/adapters/RoundVideoMessageBinder.kt
+    summary: codex/summaries/RoundVideoMessageBinder.md
+    lines: 102
+  - path: app/src/main/java/com/rezerv/app/ui/adapters/RoundVideoPlayerController.kt
+    summary: codex/summaries/RoundVideoPlayerController.md
+    lines: 238
+  - path: app/src/main/java/com/rezerv/app/ui/adapters/RoundVideoThumbnailLoader.kt
+    summary: codex/summaries/RoundVideoThumbnailLoader.md
+    lines: 60
+  - path: app/src/main/java/com/rezerv/app/ui/widget/RoundVideoProgressView.kt
+    summary: codex/summaries/RoundVideoProgressView.md
+    lines: 49
+  - path: app/src/main/java/com/rezerv/app/ui/widget/CircularClipFrameLayout.kt
+    summary: codex/summaries/CircularClipFrameLayout.md
+    lines: 38
   - path: app/src/main/java/com/rezerv/app/ui/adapters/MessagePhotoBinder.kt
     summary: codex/summaries/MessagePhotoBinder.md
     lines: 446
