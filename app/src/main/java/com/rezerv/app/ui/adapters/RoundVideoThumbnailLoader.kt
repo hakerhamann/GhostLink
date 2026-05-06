@@ -16,18 +16,19 @@ internal object RoundVideoThumbnailLoader {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
     }
 
-    fun bind(imageView: ImageView, videoUrl: String) {
-        if (videoUrl.isBlank() || videoUrl.startsWith("pending://")) {
-            clear(imageView)
-            return
-        }
-        if (videoUrl.startsWith("http://") || videoUrl.startsWith("https://")) {
+    fun bind(imageView: ImageView, source: String) {
+        if (
+            source.isBlank() ||
+            source.startsWith("pending://") ||
+            source.startsWith("http://") ||
+            source.startsWith("https://")
+        ) {
             clear(imageView)
             return
         }
 
-        imageView.tag = videoUrl
-        cache.get(videoUrl)?.let { cached ->
+        imageView.tag = source
+        cache.get(source)?.let { cached ->
             imageView.setImageBitmap(cached)
             imageView.isVisible = true
             return
@@ -36,10 +37,10 @@ internal object RoundVideoThumbnailLoader {
         imageView.setImageDrawable(null)
         imageView.isVisible = false
         executor.execute {
-            val bitmap = loadFrame(videoUrl) ?: return@execute
-            cache.put(videoUrl, bitmap)
+            val bitmap = loadFrame(source) ?: return@execute
+            cache.put(source, bitmap)
             mainHandler.post {
-                if (imageView.tag == videoUrl) {
+                if (imageView.tag == source) {
                     imageView.setImageBitmap(bitmap)
                     imageView.isVisible = true
                 }

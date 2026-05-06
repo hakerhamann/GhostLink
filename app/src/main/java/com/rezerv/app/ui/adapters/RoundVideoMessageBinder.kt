@@ -46,12 +46,11 @@ internal object RoundVideoMessageBinder {
         placeholderView.isVisible = true
         progressView.isVisible = true
         playButton.isVisible = !playback.isPlaying || playback.showTransientOverlay
-        durationView.isVisible = true
+        durationView.isVisible = false
         textureView.alpha = if (playback.isActive) 1f else 0f
 
         val durationMs = playback.durationMs.takeIf { it > 0 }
             ?: item.videoDurationSec.coerceAtLeast(0) * 1000
-        durationView.text = formatMessageDuration(durationMs)
         val progressFraction = when {
             durationMs <= 0 -> 0f
             playback.isActive -> playback.progressMs.toFloat() / durationMs.toFloat()
@@ -73,7 +72,10 @@ internal object RoundVideoMessageBinder {
             else -> 0.9f
         }
 
-        RoundVideoThumbnailLoader.bind(thumbnailView, localVideoPath.ifBlank { videoUrl })
+        val thumbnailSource = localVideoPath
+            .takeIf { it.isNotBlank() }
+            ?: RoundVideoCache.getCachedFileIfExists(thumbnailView.context, videoUrl)?.absolutePath.orEmpty()
+        RoundVideoThumbnailLoader.bind(thumbnailView, thumbnailSource)
         if (playback.isActive) {
             onAttachTexture(textureView)
         } else {

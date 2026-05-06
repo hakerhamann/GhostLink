@@ -31,6 +31,13 @@ internal object RoundVideoCache {
         if (file.exists() && file.length() > 0L) file else null
     }
 
+    fun getCachedFileIfExists(context: Context, url: String): File? {
+        val safeUrl = url.trim()
+        if (safeUrl.isBlank() || safeUrl.startsWith("pending://")) return null
+        val file = cacheFile(context.applicationContext, safeUrl)
+        return file.takeIf { it.exists() && it.length() > 0L }
+    }
+
     private fun download(url: String, target: File, onProgress: (Float?) -> Unit) {
         val parent = target.parentFile ?: return
         parent.mkdirs()

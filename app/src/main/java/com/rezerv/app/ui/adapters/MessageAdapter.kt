@@ -4,6 +4,7 @@ import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
+import android.graphics.Color
 import android.view.View
 import android.view.TextureView
 import android.view.LayoutInflater
@@ -310,6 +311,11 @@ class MessageAdapter(
     private class IncomingViewHolder(
         private val binding: ItemMessageIncomingBinding
     ) : RecyclerView.ViewHolder(binding.root) {
+        private val bubblePaddingStart = binding.messageBubble.paddingStart
+        private val bubblePaddingTop = binding.messageBubble.paddingTop
+        private val bubblePaddingEnd = binding.messageBubble.paddingEnd
+        private val bubblePaddingBottom = binding.messageBubble.paddingBottom
+
         fun bind(
             item: ChatMessage,
             playback: VoicePlaybackState,
@@ -327,13 +333,7 @@ class MessageAdapter(
             isHighlighted: Boolean
         ) {
             binding.tvSender.text = item.senderName
-            binding.messageBubble.setBackgroundResource(
-                if (isHighlighted) {
-                    com.rezerv.app.R.drawable.bg_message_incoming_highlight
-                } else {
-                    com.rezerv.app.R.drawable.bg_message_incoming
-                }
-            )
+            resetBubbleStyle(isVideo = item.type == MessageType.VIDEO, highlighted = isHighlighted)
 
             binding.avatarContainer.isVisible = isGroupChat
             if (isGroupChat) {
@@ -483,11 +483,37 @@ class MessageAdapter(
                 onDetachTexture = onDetachVideo
             )
         }
+
+        private fun resetBubbleStyle(isVideo: Boolean, highlighted: Boolean) {
+            if (isVideo) {
+                binding.messageBubble.setBackgroundColor(Color.TRANSPARENT)
+                binding.messageBubble.setPadding(0, 0, 0, 0)
+                return
+            }
+            binding.messageBubble.setBackgroundResource(
+                if (highlighted) {
+                    com.rezerv.app.R.drawable.bg_message_incoming_highlight
+                } else {
+                    com.rezerv.app.R.drawable.bg_message_incoming
+                }
+            )
+            binding.messageBubble.setPaddingRelative(
+                bubblePaddingStart,
+                bubblePaddingTop,
+                bubblePaddingEnd,
+                bubblePaddingBottom
+            )
+        }
     }
 
     private class OutgoingViewHolder(
         private val binding: ItemMessageOutgoingBinding
     ) : RecyclerView.ViewHolder(binding.root) {
+        private val bubblePaddingStart = binding.messageBubble.paddingStart
+        private val bubblePaddingTop = binding.messageBubble.paddingTop
+        private val bubblePaddingEnd = binding.messageBubble.paddingEnd
+        private val bubblePaddingBottom = binding.messageBubble.paddingBottom
+
         fun bind(
             item: ChatMessage,
             currentUserId: String,
@@ -504,13 +530,7 @@ class MessageAdapter(
             onReplyPreviewTap: (ChatMessage) -> Unit,
             onMessageImageTap: (ChatMessage, Int, String) -> Unit
         ) {
-            binding.messageBubble.setBackgroundResource(
-                if (isHighlighted) {
-                    com.rezerv.app.R.drawable.bg_message_outgoing_highlight
-                } else {
-                    com.rezerv.app.R.drawable.bg_message_outgoing
-                }
-            )
+            resetBubbleStyle(isVideo = item.type == MessageType.VIDEO, highlighted = isHighlighted)
             MessageReplyPreviewBinder.bind(
                 container = binding.replyContainer,
                 senderView = binding.tvReplySender,
@@ -643,6 +663,27 @@ class MessageAdapter(
                 playButton = binding.tvVideoPlay,
                 durationView = binding.tvVideoDuration,
                 onDetachTexture = onDetachVideo
+            )
+        }
+
+        private fun resetBubbleStyle(isVideo: Boolean, highlighted: Boolean) {
+            if (isVideo) {
+                binding.messageBubble.setBackgroundColor(Color.TRANSPARENT)
+                binding.messageBubble.setPadding(0, 0, 0, 0)
+                return
+            }
+            binding.messageBubble.setBackgroundResource(
+                if (highlighted) {
+                    com.rezerv.app.R.drawable.bg_message_outgoing_highlight
+                } else {
+                    com.rezerv.app.R.drawable.bg_message_outgoing
+                }
+            )
+            binding.messageBubble.setPaddingRelative(
+                bubblePaddingStart,
+                bubblePaddingTop,
+                bubblePaddingEnd,
+                bubblePaddingBottom
             )
         }
 

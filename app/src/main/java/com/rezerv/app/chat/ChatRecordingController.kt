@@ -194,8 +194,7 @@ internal class ChatRecordingController(
     fun switchVideoCamera() {
         if (currentRecordMode != RecordMode.VIDEO) return
         if (isVideoRecording || videoRecording != null) {
-            pendingCameraSwitchAfterFinalize = true
-            stopVideoRecording(send = false)
+            Toast.makeText(activity, "Переключение камеры во время записи пока недоступно", Toast.LENGTH_SHORT).show()
             return
         }
         if (!switchVideoCameraNow()) {
