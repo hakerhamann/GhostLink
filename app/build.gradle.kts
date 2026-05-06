@@ -12,8 +12,8 @@ android {
         applicationId = "com.rezerv.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 89
-        versionName = "1.9.60"
+        versionCode = 90
+        versionName = "1.9.61"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
