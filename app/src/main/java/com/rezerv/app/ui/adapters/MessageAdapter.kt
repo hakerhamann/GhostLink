@@ -43,6 +43,7 @@ class MessageAdapter(
     private var clearHighlightRunnable: Runnable? = null
     private val pendingEntranceAnimationIds = linkedSetOf<String>()
     private val entranceInterpolator = FastOutSlowInInterpolator()
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val progressHandler = Handler(Looper.getMainLooper())
     private val progressUpdater = object : Runnable {
         override fun run() {
@@ -85,7 +86,7 @@ class MessageAdapter(
                 onPlayVoice = { toggleVoicePlayback(item) },
                 onToggleVideo = { textureView -> toggleRoundVideoPlayback(item, textureView) },
                 onAttachVideo = { textureView -> roundVideoPlayer.attachTexture(item, textureView) },
-                onDetachVideo = { textureView -> roundVideoPlayer.stopIfBoundTexture(textureView) },
+                onDetachVideo = { textureView -> roundVideoPlayer.detachTexture(textureView) },
                 onIncomingAvatarTap = onIncomingAvatarTap,
                 onSenderNameTap = onSenderNameTap,
                 onIncomingMessageTap = onIncomingMessageTap,
@@ -105,7 +106,7 @@ class MessageAdapter(
                 onPlayVoice = { toggleVoicePlayback(item) },
                 onToggleVideo = { textureView -> toggleRoundVideoPlayback(item, textureView) },
                 onAttachVideo = { textureView -> roundVideoPlayer.attachTexture(item, textureView) },
-                onDetachVideo = { textureView -> roundVideoPlayer.stopIfBoundTexture(textureView) },
+                onDetachVideo = { textureView -> roundVideoPlayer.detachTexture(textureView) },
                 onOwnMessageTap = onOwnMessageTap,
                 onReplyPreviewTap = onReplyPreviewTap,
                 onMessageImageTap = onMessageImageTap
@@ -279,8 +280,10 @@ class MessageAdapter(
 
     private fun notifyMessageChanged(messageId: String?) {
         if (messageId.isNullOrBlank()) return
-        val index = currentList.indexOfFirst { it.id == messageId }
-        if (index >= 0) notifyItemChanged(index)
+        mainHandler.post {
+            val index = currentList.indexOfFirst { it.id == messageId }
+            if (index >= 0) notifyItemChanged(index)
+        }
     }
 
     private fun applyEntranceAnimationIfNeeded(holder: RecyclerView.ViewHolder, messageId: String) {
@@ -465,7 +468,7 @@ class MessageAdapter(
         }
 
         fun releaseRoundVideo(controller: RoundVideoPlayerController) {
-            controller.stopIfBoundTexture(binding.videoTexture)
+            controller.detachTexture(binding.videoTexture)
         }
 
         private fun clearRoundVideo(onDetachVideo: (TextureView) -> Unit) {
@@ -627,7 +630,7 @@ class MessageAdapter(
         }
 
         fun releaseRoundVideo(controller: RoundVideoPlayerController) {
-            controller.stopIfBoundTexture(binding.videoTexture)
+            controller.detachTexture(binding.videoTexture)
         }
 
         private fun clearRoundVideo(onDetachVideo: (TextureView) -> Unit) {

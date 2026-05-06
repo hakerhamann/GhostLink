@@ -21,6 +21,10 @@ internal object RoundVideoThumbnailLoader {
             clear(imageView)
             return
         }
+        if (videoUrl.startsWith("http://") || videoUrl.startsWith("https://")) {
+            clear(imageView)
+            return
+        }
 
         imageView.tag = videoUrl
         cache.get(videoUrl)?.let { cached ->
@@ -53,11 +57,7 @@ internal object RoundVideoThumbnailLoader {
         return runCatching {
             val retriever = MediaMetadataRetriever()
             try {
-                if (videoUrl.startsWith("http://") || videoUrl.startsWith("https://")) {
-                    retriever.setDataSource(videoUrl, emptyMap())
-                } else {
-                    retriever.setDataSource(videoUrl)
-                }
+                retriever.setDataSource(videoUrl)
                 retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
             } finally {
                 retriever.release()

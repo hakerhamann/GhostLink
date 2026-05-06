@@ -49,10 +49,16 @@ internal class RoundVideoPlayerController(
 
     fun playbackStateFor(item: ChatMessage): RoundVideoPlaybackState {
         val player = mediaPlayer
-        val isActive = activeMessageId == item.id && player != null
+        val isActive = activeMessageId == item.id &&
+            (player != null || downloadingMessageId == item.id || preparingMessageId == item.id)
         val isPreparedActive = isActive && prepared && player != null
+        val durationFromPlayer = if (isPreparedActive) {
+            runCatching { player!!.duration }.getOrDefault(0)
+        } else {
+            0
+        }
         val durationMs = when {
-            isPreparedActive && runCatching { player!!.duration }.getOrDefault(0) > 0 -> player!!.duration
+            durationFromPlayer > 0 -> durationFromPlayer
             else -> item.videoDurationSec.coerceAtLeast(0) * 1000
         }
         val progressMs = when {
@@ -74,7 +80,7 @@ internal class RoundVideoPlayerController(
     }
 
     fun attachTexture(item: ChatMessage, textureView: TextureView) {
-        if (item.id != activeMessageId || mediaPlayer == null) {
+        if (item.id != activeMessageId) {
             clearTextureListener(textureView)
             return
         }
@@ -94,15 +100,23 @@ internal class RoundVideoPlayerController(
                 release()
                 return
             }
-            if (player.isPlaying) {
+            val isPlaying = runCatching { player.isPlaying }.getOrDefault(false)
+            if (isPlaying) {
                 shouldStartWhenReady = false
                 overlayUntilMs = Long.MAX_VALUE
-                player.pause()
+                runCatching { player.pause() }.onFailure {
+                    failActive(item.id)
+                    return
+                }
                 progressHandler.removeCallbacks(progressUpdater)
                 notifyMessageChanged(item.id)
             } else {
                 shouldStartWhenReady = true
                 overlayUntilMs = System.currentTimeMillis() + TAP_OVERLAY_MS
+                if (completedMessageId == item.id) {
+                    runCatching { player.seekTo(0) }
+                    completedMessageId = null
+                }
                 startIfReady()
             }
             return
@@ -126,9 +140,11 @@ internal class RoundVideoPlayerController(
         prepareSourceAndCreatePlayer(item, videoUrl, localVideoPath)
     }
 
-    fun stopIfBoundTexture(textureView: TextureView) {
+    fun detachTexture(textureView: TextureView) {
         if (boundTextureView === textureView) {
-            release()
+            clearTextureListener(textureView)
+            releaseSurface()
+            boundTextureView = null
         } else {
             clearTextureListener(textureView)
         }
@@ -168,6 +184,7 @@ internal class RoundVideoPlayerController(
             if (file == null) {
                 errorMessageId = item.id
                 releasePlayerOnly()
+                detachBoundTexture()
                 notifyMessageChanged(item.id)
                 return@launch
             }
@@ -187,10 +204,12 @@ internal class RoundVideoPlayerController(
                         .build()
                 )
                 setDataSource(dataSource)
-                surface?.let { setSurface(it) }
+                surface?.let { currentSurface ->
+                    runCatching { setSurface(currentSurface) }.getOrThrow()
+                }
                 setOnPreparedListener { player ->
                     if (activeMessageId != item.id) {
-                        player.release()
+                        runCatching { player.release() }
                         return@setOnPreparedListener
                     }
                     prepared = true
@@ -212,7 +231,9 @@ internal class RoundVideoPlayerController(
                 }
                 setOnErrorListener { _, _, _ ->
                     errorMessageId = item.id
-                    release()
+                    releasePlayerOnly()
+                    detachBoundTexture()
+                    notifyMessageChanged(item.id)
                     true
                 }
                 prepareAsync()
@@ -220,7 +241,7 @@ internal class RoundVideoPlayerController(
         }.onSuccess { player ->
             mediaPlayer = player
         }.onFailure {
-            release()
+            failActive(item.id)
         }
     }
 
@@ -246,7 +267,10 @@ internal class RoundVideoPlayerController(
             }
 
             override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
-                release()
+                if (boundTextureView === textureView) {
+                    releaseSurface()
+                    boundTextureView = null
+                }
                 return true
             }
 
@@ -260,8 +284,17 @@ internal class RoundVideoPlayerController(
     private fun attachSurface(surfaceTexture: SurfaceTexture?) {
         if (surfaceTexture == null) return
         releaseSurface()
-        surface = Surface(surfaceTexture)
-        mediaPlayer?.setSurface(surface)
+        val newSurface = runCatching { Surface(surfaceTexture) }.getOrElse {
+            failActive(activeMessageId)
+            return
+        }
+        surface = newSurface
+        mediaPlayer?.let { player ->
+            runCatching { player.setSurface(newSurface) }.onFailure {
+                failActive(activeMessageId)
+                return
+            }
+        }
         boundTextureView?.let { applyCenterCrop(it) }
         startIfReady()
     }
@@ -270,8 +303,7 @@ internal class RoundVideoPlayerController(
         val player = mediaPlayer ?: return
         if (!prepared || surface == null || !shouldStartWhenReady) return
         runCatching { player.start() }.onFailure {
-            errorMessageId = activeMessageId
-            release()
+            failActive(activeMessageId)
             return
         }
         completedMessageId = null
@@ -317,6 +349,19 @@ internal class RoundVideoPlayerController(
     private fun releaseSurface() {
         runCatching { surface?.release() }
         surface = null
+    }
+
+    private fun detachBoundTexture() {
+        boundTextureView?.let { clearTextureListener(it) }
+        boundTextureView = null
+        releaseSurface()
+    }
+
+    private fun failActive(messageId: String?) {
+        errorMessageId = messageId
+        releasePlayerOnly()
+        detachBoundTexture()
+        notifyMessageChanged(messageId)
     }
 
     private fun clearTextureListener(textureView: TextureView) {
