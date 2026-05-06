@@ -556,12 +556,23 @@ def update_chat_avatar(chat_id: str):
         return jsonify({"error": "Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В¤Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В°Р В Р’В Р вЂ™Р’В Р В Р вЂ Р Р†Р вЂљРЎвЂєР Р†Р вЂљРІР‚СљР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В» Р В Р’В Р В Р вЂ№Р В Р’В Р РЋРІР‚СљР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В»Р В Р’В Р вЂ™Р’В Р В Р Р‹Р Р†Р вЂљР’ВР В Р’В Р В Р вЂ№Р В Р вЂ Р Р†Р вЂљРЎв„ўР вЂ™Р’В¬Р В Р’В Р вЂ™Р’В Р В Р Р‹Р Р†Р вЂљРЎСљР В Р’В Р вЂ™Р’В Р В Р Р‹Р Р†Р вЂљРЎС›Р В Р’В Р вЂ™Р’В Р В Р Р‹Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В±Р В Р’В Р вЂ™Р’В Р В Р Р‹Р Р†Р вЂљРЎС›Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В»Р В Р’В Р В Р вЂ№Р В Р’В Р В РІР‚В°Р В Р’В Р В Р вЂ№Р В Р вЂ Р Р†Р вЂљРЎв„ўР вЂ™Р’В¬Р В Р’В Р вЂ™Р’В Р В Р Р‹Р Р†Р вЂљРЎС›Р В Р’В Р вЂ™Р’В Р В Р вЂ Р Р†Р вЂљРЎвЂєР Р†Р вЂљРІР‚Сљ"}), 400
 
     old_avatar = str(chat_row["avatar_url"] or "").strip()
+    timestamp = now_ms()
+    actor_display_name = str(g.current_user["display_name"] or "").strip() or str(g.current_user["login"] or "").strip()
     update_chat_avatar_record(
         db,
         chat_id=parsed_chat_id,
         file_name=upload.file_name,
-        updated_at=now_ms(),
+        updated_at=timestamp,
     )
+    chat_group_service.create_avatar_changed_message(
+        db,
+        chat_id=parsed_chat_id,
+        actor_user_id=user_id,
+        actor_display_name=actor_display_name,
+        avatar_file_name=upload.file_name,
+        timestamp=timestamp,
+    )
+    db.commit()
 
     if old_avatar != upload.file_name:
         remove_local_upload_if_present(AVATAR_DIR, old_avatar)
@@ -626,6 +637,9 @@ def add_group_member(chat_id: str):
         db,
         chat_id=parsed_chat_id,
         user_id=target_user_id,
+        actor_user_id=user_id,
+        actor_display_name=str(g.current_user["display_name"] or "").strip() or str(g.current_user["login"] or "").strip(),
+        target_display_name=str(target_user["display_name"] or "").strip() or str(target_user["login"] or "").strip(),
         timestamp=now_ms(),
     )
 
@@ -689,7 +703,7 @@ def remove_group_member(chat_id: str):
         return jsonify({"error": "Target login is required"}), 400
 
     target_user = db.execute(
-        "SELECT id, login FROM users WHERE login = ? LIMIT 1",
+        "SELECT id, login, display_name FROM users WHERE login = ? LIMIT 1",
         (target_login,),
     ).fetchone()
     if target_user is None:
@@ -710,6 +724,9 @@ def remove_group_member(chat_id: str):
         db,
         chat_id=parsed_chat_id,
         target_user_id=target_user_id,
+        actor_user_id=current_user_id,
+        actor_display_name=str(g.current_user["display_name"] or "").strip() or str(g.current_user["login"] or "").strip(),
+        target_display_name=str(target_user["display_name"] or "").strip() or str(target_user["login"] or "").strip(),
         timestamp=now_ms(),
     )
 

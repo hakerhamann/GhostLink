@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.DataOutputStream
+import java.io.IOException
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
@@ -95,31 +96,81 @@ class ApiClient(
         contentType: String
     ): JSONObject =
         withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = sessionStore.getServerUrl().removeSuffix("/")
+                val safePath = if (path.startsWith("/")) path else "/$path"
+                val url = URL("$baseUrl$safePath")
+                val boundary = "----GhostLinkBoundary${System.currentTimeMillis()}"
+
+                val connection = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 20_000
+                    readTimeout = 20_000
+                    doInput = true
+                    doOutput = true
+                    setRequestProperty("Accept", "application/json")
+                    setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                    sessionStore.authToken()?.let { token ->
+                        setRequestProperty("Authorization", "Bearer $token")
+                    }
+                }
+
+                DataOutputStream(connection.outputStream).use { output ->
+                    output.writeBytes("--$boundary\r\n")
+                    output.writeBytes("Content-Disposition: form-data; name=\"$fieldName\"; filename=\"$fileName\"\r\n")
+                    output.writeBytes("Content-Type: $contentType\r\n\r\n")
+                    output.write(payloadBytes)
+                    output.writeBytes("\r\n--$boundary--\r\n")
+                    output.flush()
+                }
+
+                val status = connection.responseCode
+                val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+                val body = stream?.use { input ->
+                    BufferedReader(InputStreamReader(input)).readText()
+                }.orEmpty()
+
+                if (status !in 200..299) {
+                    val message = parseErrorMessage(body)
+                    throw ApiException(status, message)
+                }
+
+                if (body.isBlank()) JSONObject() else JSONObject(body)
+            } catch (exception: IOException) {
+                throw connectionException(exception)
+            }
+        }
+
+    private suspend fun request(
+        method: String,
+        path: String,
+        payload: JSONObject?,
+        withAuth: Boolean
+    ): JSONObject = withContext(Dispatchers.IO) {
+        try {
             val baseUrl = sessionStore.getServerUrl().removeSuffix("/")
             val safePath = if (path.startsWith("/")) path else "/$path"
             val url = URL("$baseUrl$safePath")
-            val boundary = "----GhostLinkBoundary${System.currentTimeMillis()}"
 
             val connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 20_000
-                readTimeout = 20_000
+                requestMethod = method
+                connectTimeout = 10_000
+                readTimeout = 10_000
                 doInput = true
-                doOutput = true
                 setRequestProperty("Accept", "application/json")
-                setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-                sessionStore.authToken()?.let { token ->
-                    setRequestProperty("Authorization", "Bearer $token")
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                if (withAuth) {
+                    sessionStore.authToken()?.let { token ->
+                        setRequestProperty("Authorization", "Bearer $token")
+                    }
                 }
             }
 
-            DataOutputStream(connection.outputStream).use { output ->
-                output.writeBytes("--$boundary\r\n")
-                output.writeBytes("Content-Disposition: form-data; name=\"$fieldName\"; filename=\"$fileName\"\r\n")
-                output.writeBytes("Content-Type: $contentType\r\n\r\n")
-                output.write(payloadBytes)
-                output.writeBytes("\r\n--$boundary--\r\n")
-                output.flush()
+            if (payload != null) {
+                connection.doOutput = true
+                connection.outputStream.use { output ->
+                    output.write(payload.toString().toByteArray(Charsets.UTF_8))
+                }
             }
 
             val status = connection.responseCode
@@ -133,55 +184,13 @@ class ApiClient(
                 throw ApiException(status, message)
             }
 
-            if (body.isBlank()) JSONObject() else JSONObject(body)
-        }
-
-    private suspend fun request(
-        method: String,
-        path: String,
-        payload: JSONObject?,
-        withAuth: Boolean
-    ): JSONObject = withContext(Dispatchers.IO) {
-        val baseUrl = sessionStore.getServerUrl().removeSuffix("/")
-        val safePath = if (path.startsWith("/")) path else "/$path"
-        val url = URL("$baseUrl$safePath")
-
-        val connection = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 10_000
-            readTimeout = 10_000
-            doInput = true
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            if (withAuth) {
-                sessionStore.authToken()?.let { token ->
-                    setRequestProperty("Authorization", "Bearer $token")
-                }
+            if (body.isBlank()) {
+                JSONObject()
+            } else {
+                JSONObject(body)
             }
-        }
-
-        if (payload != null) {
-            connection.doOutput = true
-            connection.outputStream.use { output ->
-                output.write(payload.toString().toByteArray(Charsets.UTF_8))
-            }
-        }
-
-        val status = connection.responseCode
-        val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-        val body = stream?.use { input ->
-            BufferedReader(InputStreamReader(input)).readText()
-        }.orEmpty()
-
-        if (status !in 200..299) {
-            val message = parseErrorMessage(body)
-            throw ApiException(status, message)
-        }
-
-        if (body.isBlank()) {
-            JSONObject()
-        } else {
-            JSONObject(body)
+        } catch (exception: IOException) {
+            throw connectionException(exception)
         }
     }
 
@@ -190,5 +199,11 @@ class ApiClient(
         return runCatching {
             JSONObject(body).optString("error").ifBlank { body }
         }.getOrDefault(body)
+    }
+
+    private fun connectionException(cause: IOException): ApiException {
+        return ApiException(statusCode = 0, message = "Нет соединения с сервером").also {
+            it.initCause(cause)
+        }
     }
 }

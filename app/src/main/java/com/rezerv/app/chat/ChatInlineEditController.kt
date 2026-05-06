@@ -65,7 +65,10 @@ internal class ChatInlineEditController(
 
     fun updateInlineEditUi() {
         val editState = state
-        binding.editContainer.isVisible = editState != null && editState.message.type != MessageType.IMAGE
+        binding.editContainer.isVisible = editState != null &&
+            editState.message.type != MessageType.IMAGE &&
+            editState.message.type != MessageType.SYSTEM &&
+            editState.message.type != MessageType.SYSTEM_AVATAR
         if (editState == null) {
             binding.tvEditTitle.text = ""
             binding.tvEditText.text = ""
@@ -78,6 +81,8 @@ internal class ChatInlineEditController(
             MessageType.IMAGE -> "Редактирование фото"
             MessageType.VOICE -> "Редактирование голосового"
             MessageType.VIDEO -> "Редактирование видео"
+            MessageType.SYSTEM,
+            MessageType.SYSTEM_AVATAR -> "Системное сообщение"
             MessageType.TEXT -> "Редактирование сообщения"
         }
         binding.tvEditText.text = when (editState.message.type) {
@@ -99,6 +104,9 @@ internal class ChatInlineEditController(
             MessageType.TEXT -> {
                 editState.message.text.replace('\n', ' ').trim().ifBlank { "Текст сообщения" }
             }
+
+            MessageType.SYSTEM,
+            MessageType.SYSTEM_AVATAR -> editState.message.text.replace('\n', ' ').trim()
         }
     }
 

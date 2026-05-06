@@ -110,11 +110,22 @@ class ChatGroupService:
         *,
         chat_id: int,
         user_id: int,
+        actor_user_id: int,
+        actor_display_name: str,
+        target_display_name: str,
         timestamp: int,
     ) -> None:
         db.execute(
             "INSERT INTO chat_members(chat_id, user_id, last_read_at, last_delivered_at, created_at) VALUES(?, ?, ?, ?, ?)",
             (chat_id, user_id, timestamp, timestamp, timestamp),
+        )
+        self.create_system_message(
+            db,
+            chat_id=chat_id,
+            sender_id=actor_user_id,
+            text=f"{actor_display_name} добавил(а) {target_display_name}",
+            kind="system",
+            timestamp=timestamp,
         )
         db.execute(
             "UPDATE chats SET updated_at = ? WHERE id = ?",
@@ -170,8 +181,19 @@ class ChatGroupService:
         *,
         chat_id: int,
         target_user_id: int,
+        actor_user_id: int,
+        actor_display_name: str,
+        target_display_name: str,
         timestamp: int,
     ) -> None:
+        self.create_system_message(
+            db,
+            chat_id=chat_id,
+            sender_id=actor_user_id,
+            text=f"{actor_display_name} исключил(а) {target_display_name}",
+            kind="system",
+            timestamp=timestamp,
+        )
         db.execute(
             "DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?",
             (chat_id, target_user_id),
@@ -181,3 +203,50 @@ class ChatGroupService:
             (timestamp, chat_id),
         )
         db.commit()
+
+    def create_avatar_changed_message(
+        self,
+        db: sqlite3.Connection,
+        *,
+        chat_id: int,
+        actor_user_id: int,
+        actor_display_name: str,
+        avatar_file_name: str,
+        timestamp: int,
+    ) -> None:
+        self.create_system_message(
+            db,
+            chat_id=chat_id,
+            sender_id=actor_user_id,
+            text=f"{actor_display_name} изменил(а) аватарку группы",
+            kind="system_avatar",
+            media_url=avatar_file_name,
+            timestamp=timestamp,
+        )
+
+    def create_system_message(
+        self,
+        db: sqlite3.Connection,
+        *,
+        chat_id: int,
+        sender_id: int,
+        text: str,
+        kind: str,
+        timestamp: int,
+        media_url: str | None = None,
+    ) -> None:
+        db.execute(
+            """
+            INSERT INTO messages(
+                chat_id,
+                sender_id,
+                text,
+                kind,
+                media_url,
+                created_at,
+                updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, 0)
+            """,
+            (chat_id, sender_id, text, kind, media_url, timestamp),
+        )

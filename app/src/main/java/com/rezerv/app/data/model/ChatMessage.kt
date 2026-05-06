@@ -32,7 +32,9 @@ enum class MessageType {
     TEXT,
     VOICE,
     IMAGE,
-    VIDEO
+    VIDEO,
+    SYSTEM,
+    SYSTEM_AVATAR
 }
 
 enum class MessageSendState {

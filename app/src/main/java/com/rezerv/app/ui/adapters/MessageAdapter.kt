@@ -17,6 +17,7 @@ import com.rezerv.app.data.model.MessageSendState
 import com.rezerv.app.data.model.MessageType
 import com.rezerv.app.databinding.ItemMessageIncomingBinding
 import com.rezerv.app.databinding.ItemMessageOutgoingBinding
+import com.rezerv.app.databinding.ItemMessageSystemBinding
 import com.rezerv.app.util.AvatarLoader
 import com.rezerv.app.util.Formatters
 
@@ -51,13 +52,20 @@ class MessageAdapter(
     }
 
     override fun getItemViewType(position: Int): Int {
-        return if (getItem(position).senderId == currentUserId) TYPE_OUTGOING else TYPE_INCOMING
+        val item = getItem(position)
+        return when {
+            item.type == MessageType.SYSTEM || item.type == MessageType.SYSTEM_AVATAR -> TYPE_SYSTEM
+            item.senderId == currentUserId -> TYPE_OUTGOING
+            else -> TYPE_INCOMING
+        }
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
         val inflater = LayoutInflater.from(parent.context)
         return if (viewType == TYPE_OUTGOING) {
             OutgoingViewHolder(ItemMessageOutgoingBinding.inflate(inflater, parent, false))
+        } else if (viewType == TYPE_SYSTEM) {
+            SystemViewHolder(ItemMessageSystemBinding.inflate(inflater, parent, false))
         } else {
             IncomingViewHolder(ItemMessageIncomingBinding.inflate(inflater, parent, false))
         }
@@ -94,6 +102,8 @@ class MessageAdapter(
                 onMessageImageTap = onMessageImageTap,
                 onMessageVideoTap = onMessageVideoTap
             )
+
+            is SystemViewHolder -> holder.bind(item)
         }
         applyEntranceAnimationIfNeeded(holder, item.id)
     }
@@ -395,6 +405,9 @@ class MessageAdapter(
                     binding.ivImageMessage.setOnClickListener(null)
                     binding.tvMessage.text = item.text
                 }
+
+                MessageType.SYSTEM,
+                MessageType.SYSTEM_AVATAR -> Unit
             }
 
             val time = Formatters.formatTime(item.timestamp)
@@ -526,6 +539,9 @@ class MessageAdapter(
                     binding.ivImageMessage.setOnClickListener(null)
                     binding.tvMessage.text = item.text
                 }
+
+                MessageType.SYSTEM,
+                MessageType.SYSTEM_AVATAR -> Unit
             }
 
             val time = Formatters.formatTime(item.timestamp)
@@ -555,6 +571,26 @@ class MessageAdapter(
 
     }
 
+    private class SystemViewHolder(
+        private val binding: ItemMessageSystemBinding
+    ) : RecyclerView.ViewHolder(binding.root) {
+        fun bind(item: ChatMessage) {
+            binding.tvMessage.text = item.text
+            binding.avatarContainer.isVisible = item.type == MessageType.SYSTEM_AVATAR && !item.imageUrl.isNullOrBlank()
+            if (binding.avatarContainer.isVisible) {
+                AvatarLoader.bind(
+                    imageView = binding.ivAvatar,
+                    fallbackView = binding.tvAvatarFallback,
+                    displayName = item.text,
+                    avatarUrl = item.imageUrl
+                )
+            } else {
+                binding.ivAvatar.setImageDrawable(null)
+                binding.tvAvatarFallback.text = ""
+            }
+        }
+    }
+
     private object DiffCallback : DiffUtil.ItemCallback<ChatMessage>() {
         override fun areItemsTheSame(oldItem: ChatMessage, newItem: ChatMessage): Boolean {
             return oldItem.id == newItem.id
@@ -568,6 +604,7 @@ class MessageAdapter(
     private companion object {
         const val TYPE_INCOMING = 1
         const val TYPE_OUTGOING = 2
+        const val TYPE_SYSTEM = 3
         const val PLAYBACK_TICK_MS = 250L
     }
 }

@@ -15,13 +15,6 @@
     <string name="send_short">Отпр</string>
     <string name="send_full">Отправить</string>
     <string name="hide">Скрыть</string>
-    <string name="server_hint">Адрес сервера (http://IP:PORT)</string>
-    <string name="server_select_hint">Сервер подключения</string>
-    <string name="server_url_required">Введите адрес сервера</string>
-    <string name="server_settings">Сервер</string>
-    <string name="save_server">Сохранить сервер</string>
-    <string name="server_saved">Сервер сохранен</string>
-    <string name="server_changed_relogin">Сервер изменен. Выполните вход заново.</string>
     <string name="login_hint">Логин</string>
     <string name="password_hint">Пароль</string>
     <string name="display_name_hint">Имя для чатов</string>

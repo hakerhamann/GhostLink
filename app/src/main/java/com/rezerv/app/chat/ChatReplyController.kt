@@ -94,6 +94,8 @@ internal class ChatReplyController(
                 .takeIf { it.isNotBlank() && it != PHOTO_PREVIEW_TEXT }
                 ?: PHOTO_PREVIEW_TEXT
             MessageType.VIDEO -> VIDEO_PREVIEW_TEXT
+            MessageType.SYSTEM,
+            MessageType.SYSTEM_AVATAR -> message.text.normalizeReplyPreviewText().ifBlank { "..." }
             MessageType.TEXT -> message.text.normalizeReplyPreviewText().ifBlank { "..." }
         }
     }

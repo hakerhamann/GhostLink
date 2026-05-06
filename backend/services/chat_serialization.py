@@ -183,7 +183,7 @@ class ChatSerializationService:
             read_by.append(sender_uid)
 
         message_kind = str(row["kind"] or "text").strip().lower()
-        if message_kind not in {"voice", "image", "video"}:
+        if message_kind not in {"voice", "image", "video", "system", "system_avatar"}:
             message_kind = "text"
 
         text = str(row["text"] or "")
@@ -222,6 +222,10 @@ class ChatSerializationService:
             video_duration = max(0, int(row["media_duration"] or 0))
             if not text.strip():
                 text = self.video_fallback_text
+        elif message_kind == "system_avatar":
+            image_url = self.normalize_avatar_url(row["media_url"])
+            if image_url is not None:
+                image_urls = [image_url]
 
         sender_avatar_url = None
         if "avatar_url" in row.keys():

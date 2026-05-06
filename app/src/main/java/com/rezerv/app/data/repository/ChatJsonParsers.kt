@@ -39,6 +39,8 @@ internal object ChatJsonParsers {
                 "voice" -> MessageType.VOICE
                 "image" -> MessageType.IMAGE
                 "video" -> MessageType.VIDEO
+                "system" -> MessageType.SYSTEM
+                "system_avatar" -> MessageType.SYSTEM_AVATAR
                 else -> MessageType.TEXT
             },
             voiceUrl = item.optCleanString("voiceUrl"),

@@ -41,19 +41,7 @@ class SessionStore(context: Context) {
     )
 
     fun getServerUrl(): String {
-        return prefs.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL
-    }
-
-    fun setServerUrl(rawValue: String) {
-        val normalized = normalizeServerUrl(rawValue)
-        val current = getServerUrl()
-        prefs.edit().putString(KEY_SERVER_URL, normalized).apply()
-        if (current != normalized) {
-            clearSession()
-            clearAvailableUpdate()
-            clearDownloadedUpdate()
-            clearUpdatesInfoCache()
-        }
+        return DEFAULT_SERVER_URL
     }
 
     fun saveSession(token: String, user: UserProfile) {
@@ -257,14 +245,7 @@ class SessionStore(context: Context) {
     }
 
     private fun normalizeServerUrl(value: String): String {
-        var result = value.trim()
-        if (result.isBlank()) {
-            result = DEFAULT_SERVER_URL
-        }
-        if (!result.startsWith("http://") && !result.startsWith("https://")) {
-            result = "http://$result"
-        }
-        return result.removeSuffix("/")
+        return value.let { DEFAULT_SERVER_URL }
     }
 
     private fun loadChatScrollStateRoot(): JSONObject {

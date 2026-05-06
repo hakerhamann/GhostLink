@@ -11,6 +11,21 @@
 
 Если между "сделать красиво" и "не сломать клиент" есть конфликт, всегда выбирай второе.
 
+## Windows shell policy
+
+- Use PowerShell 7 only. Prefer `pwsh.exe`, not `powershell.exe`.
+- Before running shell commands, verify the shell with:
+  `pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion; $PSHOME'`
+- Do not use long one-line PowerShell commands with nested quotes, JSON, braces, or parentheses.
+- For complex commands, create a temporary script file under `.codex/tmp/` and run it with:
+  `pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File .codex/tmp/<script>.ps1`
+- Do not wrap PowerShell inside `cmd.exe` unless explicitly required.
+- Do not wrap `cmd.exe` inside PowerShell unless explicitly required.
+- For Node/Python snippets, write a temporary `.js` or `.py` file instead of using `node -e` or `python -c` with nested quotes.
+- If a command fails because of quoting, rewrite it as a script file instead of trying more escaping.
+
+
+
 ## Источники истины
 
 Используй такой приоритет:
@@ -47,6 +62,10 @@
 3. Сначала делай структурные изменения без смены поведения.
 4. После каждого атомарного шага прогони проверки.
 5. Держи изменения маленькими и коммить их отдельно.
+
+
+
+
 
 ## Контекстная дисциплина
 
