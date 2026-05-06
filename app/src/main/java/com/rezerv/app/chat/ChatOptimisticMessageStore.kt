@@ -203,7 +203,8 @@ internal class ChatOptimisticMessageStore(
     fun buildOptimisticVideoMessage(
         user: UserProfile,
         durationSec: Int,
-        replyTarget: ChatMessage?
+        replyTarget: ChatMessage?,
+        localVideoPath: String? = null
     ): ChatMessage {
         val message = buildOptimisticBaseMessage(
             user = user,
@@ -213,6 +214,7 @@ internal class ChatOptimisticMessageStore(
         )
         return message.copy(
             videoUrl = "pending://video/${message.id}",
+            localVideoPath = localVideoPath?.trim()?.takeIf { it.isNotBlank() },
             videoDurationSec = durationSec.coerceAtLeast(0)
         )
     }
@@ -299,6 +301,7 @@ internal class ChatOptimisticMessageStore(
             first.imageWidths == second.imageWidths &&
             first.imageHeights == second.imageHeights &&
             first.videoUrl == second.videoUrl &&
+            first.localVideoPath == second.localVideoPath &&
             first.videoDurationSec == second.videoDurationSec &&
             first.replyToMessageId == second.replyToMessageId &&
             first.replyToSenderName == second.replyToSenderName &&

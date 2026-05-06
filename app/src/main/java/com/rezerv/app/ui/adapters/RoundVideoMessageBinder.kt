@@ -25,7 +25,8 @@ internal object RoundVideoMessageBinder {
         onDetachTexture: (TextureView) -> Unit
     ) {
         val videoUrl = item.videoUrl?.trim().orEmpty()
-        if (videoUrl.isBlank()) {
+        val localVideoPath = item.localVideoPath?.trim().orEmpty()
+        if (videoUrl.isBlank() && localVideoPath.isBlank()) {
             clear(
                 container = container,
                 textureView = textureView,
@@ -41,10 +42,10 @@ internal object RoundVideoMessageBinder {
 
         val isPending = item.sendState != MessageSendState.SENT || videoUrl.startsWith("pending://")
         container.isVisible = true
-        container.alpha = if (isPending) 0.66f else 1f
+        container.alpha = 1f
         placeholderView.isVisible = true
         progressView.isVisible = true
-        playButton.isVisible = true
+        playButton.isVisible = !playback.isPlaying || playback.showTransientOverlay
         durationView.isVisible = true
         textureView.alpha = if (playback.isActive) 1f else 0f
 
@@ -54,29 +55,32 @@ internal object RoundVideoMessageBinder {
         val progressFraction = when {
             durationMs <= 0 -> 0f
             playback.isActive -> playback.progressMs.toFloat() / durationMs.toFloat()
+            playback.downloadProgress != null -> playback.downloadProgress
+            isPending -> 0.12f
             else -> 0f
         }
         progressView.setProgressFraction(progressFraction)
 
         playButton.text = when {
-            isPending || playback.isPreparing -> "\u2026"
-            playback.isPlaying -> "\u275A\u275A"
+            playback.isError -> "!"
+            playback.isDownloading || isPending || playback.isPreparing -> "\u2026"
+            playback.isPlaying -> ""
             else -> "\u25B6"
         }
         playButton.alpha = when {
-            playback.isPlaying -> 0.58f
+            playback.isPlaying -> 0f
             isPending -> 0.5f
             else -> 0.9f
         }
 
-        RoundVideoThumbnailLoader.bind(thumbnailView, videoUrl)
+        RoundVideoThumbnailLoader.bind(thumbnailView, localVideoPath.ifBlank { videoUrl })
         if (playback.isActive) {
             onAttachTexture(textureView)
         } else {
             onDetachTexture(textureView)
         }
         container.setOnClickListener(
-            if (isPending) {
+            if (isPending && localVideoPath.isBlank()) {
                 null
             } else {
                 { onToggleVideo(textureView) }

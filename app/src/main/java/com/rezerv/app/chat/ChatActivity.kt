@@ -1462,15 +1462,11 @@ class ChatActivity : AppCompatActivity() {
             user = user,
             durationSec = durationSec,
             replyTarget = replyTarget
-        )
+        ).copy(localVideoPath = file.absolutePath)
         appendOutgoingOverlayMessage(optimisticMessage)
         clearReplyTarget()
 
         lifecycleScope.launch {
-            binding.btnVoice.isEnabled = false
-            binding.btnSend.isEnabled = false
-            binding.progress.isVisible = true
-
             runCatching {
                 val videoUrl = AppContainer.chatRepository.uploadVideo(
                     chatId = chatId,
@@ -1497,9 +1493,6 @@ class ChatActivity : AppCompatActivity() {
             }
 
             runCatching { file.delete() }
-            binding.progress.isVisible = false
-            binding.btnVoice.isEnabled = true
-            binding.btnSend.isEnabled = true
         }
     }
 
