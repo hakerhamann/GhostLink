@@ -23,7 +23,7 @@ import java.nio.FloatBuffer
 
 internal object RoundVideoOrientationFixer {
     fun pixelRotateBackSegment180(input: File, output: File) {
-        val correctionMode = CorrectionMode.ROTATE_270
+        val correctionMode = CorrectionMode.ROTATE_90
         val tracks = findTracks(input)
         require(tracks.videoIndex >= 0) { "No video track" }
         val videoFormat = tracks.videoFormat ?: error("No video format")
