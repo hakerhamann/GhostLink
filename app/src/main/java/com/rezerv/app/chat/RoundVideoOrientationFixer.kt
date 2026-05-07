@@ -69,6 +69,7 @@ internal object RoundVideoOrientationFixer {
                 start()
             }
             muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            muxer.setOrientationHint(0)
             var muxerStarted = false
             var videoMuxTrack = -1
             val audioMuxTrack = tracks.audioFormat?.let { muxer.addTrack(it) } ?: -1
@@ -130,6 +131,7 @@ internal object RoundVideoOrientationFixer {
                             check(!muxerStarted) { "encoder format changed twice" }
                             val outFormat = encoder.outputFormat
                             if (durationUs > 0L) outFormat.setLong(MediaFormat.KEY_DURATION, durationUs)
+                            outFormat.setInteger(MediaFormat.KEY_ROTATION, 0)
                             videoMuxTrack = muxer.addTrack(outFormat)
                             muxer.start()
                             muxerStarted = true
@@ -154,7 +156,7 @@ internal object RoundVideoOrientationFixer {
             if (tracks.audioIndex >= 0 && audioMuxTrack >= 0) copyAudio(input, tracks.audioIndex, muxer, audioMuxTrack)
             Log.i(
                 "VideoUpload",
-                "orientation correction inputWidth=$width inputHeight=$height inputRotation=${readRotation(input)} outputWidth=$width outputHeight=$height outputRotation=${readRotation(output)} correctionMode=$correctionMode frameWidth=$width frameHeight=$height"
+                "orientation correction inputWidth=$width inputHeight=$height inputRotation=${readRotation(input)} outputWidth=$width outputHeight=$height outputRotation=${readRotation(output)} correctedOutputRotation=${readRotation(output)} correctedTrackRotation=${readRotation(output)} correctionMode=$correctionMode correctedFrameWidth=$width correctedFrameHeight=$height"
             )
         } finally {
             runCatching { extractor.release() }

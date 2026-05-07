@@ -497,8 +497,9 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun isSwipeBackBlockedZone(event: MotionEvent): Boolean {
-        if (!binding.emojiContainer.isVisible) return false
-        return isPointInsideView(event, binding.emojiContainer)
+        if (binding.emojiContainer.isVisible && isPointInsideView(event, binding.emojiContainer)) return true
+        if (adapter?.isRoundVideoExpanded() == true && isPointInsideView(event, binding.recyclerMessages)) return true
+        return false
     }
 
     private fun isPointInsideView(event: MotionEvent, view: View): Boolean {

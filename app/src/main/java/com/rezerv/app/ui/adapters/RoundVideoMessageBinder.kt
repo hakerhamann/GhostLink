@@ -153,6 +153,7 @@ internal object RoundVideoMessageBinder {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     view.animate().cancel()
+                    view.parent?.requestDisallowInterceptTouchEvent(true)
                     downX = event.rawX
                     downY = event.rawY
                     dragging = false
@@ -165,18 +166,14 @@ internal object RoundVideoMessageBinder {
                         dragging = true
                     }
                     if (dragging) {
-                        if (dx < 0f && abs(dx) > abs(dy)) {
-                            view.parent?.requestDisallowInterceptTouchEvent(false)
-                        } else {
-                            view.parent?.requestDisallowInterceptTouchEvent(true)
-                            view.translationX = dx.coerceAtLeast(0f)
-                            view.translationY = dy
-                            val progress = ((abs(dx) + abs(dy)) / threshold).coerceIn(0f, 1f)
-                            val scale = 1f - 0.04f * progress
-                            view.scaleX = scale
-                            view.scaleY = scale
-                            view.alpha = 1f - 0.08f * progress
-                        }
+                        view.parent?.requestDisallowInterceptTouchEvent(true)
+                        view.translationX = dx
+                        view.translationY = dy
+                        val progress = ((abs(dx) + abs(dy)) / threshold).coerceIn(0f, 1f)
+                        val scale = 1f - 0.04f * progress
+                        view.scaleX = scale
+                        view.scaleY = scale
+                        view.alpha = 1f - 0.08f * progress
                     }
                     true
                 }
@@ -186,8 +183,10 @@ internal object RoundVideoMessageBinder {
                     view.parent?.requestDisallowInterceptTouchEvent(false)
                     when {
                         dx < -threshold && abs(dx) > abs(dy) -> {
-                            animateReset(view, interpolator) {
-                                onReplyToMessage(item)
+                            animateCollapse(view, dx, dy, threshold, interpolator) {
+                                if (onCollapseExpandedByGesture()) {
+                                    onReplyToMessage(item)
+                                }
                             }
                         }
                         dx > threshold || abs(dy) > threshold -> {
@@ -218,7 +217,11 @@ internal object RoundVideoMessageBinder {
         interpolator: FastOutSlowInInterpolator,
         endAction: () -> Unit
     ) {
-        val targetX = if (dx > 0f) threshold * 1.4f else 0f
+        val targetX = when {
+            dx > threshold -> threshold * 1.4f
+            dx < -threshold -> -threshold * 1.4f
+            else -> 0f
+        }
         val targetY = if (abs(dy) > threshold) dy.coerceIn(-threshold * 1.4f, threshold * 1.4f) else 0f
         view.animate()
             .translationX(targetX)

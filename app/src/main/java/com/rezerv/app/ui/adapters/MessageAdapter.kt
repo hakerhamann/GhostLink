@@ -164,6 +164,8 @@ class MessageAdapter(
         super.onDetachedFromRecyclerView(recyclerView)
     }
 
+    fun isRoundVideoExpanded(): Boolean = roundVideoPlayer.isExpanded()
+
     private fun stableRoundVideoWidth(): Int {
         recyclerView?.width?.takeIf { it > 0 }?.let { return it }
         return recyclerView?.rootView

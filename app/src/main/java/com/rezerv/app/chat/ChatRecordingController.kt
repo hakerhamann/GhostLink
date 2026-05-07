@@ -705,7 +705,7 @@ internal class ChatRecordingController(
                         }
                         val output = File(activity.cacheDir, "video_merged_${System.currentTimeMillis()}.mp4")
                         val concatStart = System.currentTimeMillis()
-                        concatMp4Segments(normalized.map { it.file }, output)
+                        concatMp4Segments(normalized, output)
                         Log.i(
                             "VideoUpload",
                             "concat end ms=${System.currentTimeMillis() - concatStart} segments=${normalized.size} outputSize=${output.length()}"
@@ -756,7 +756,7 @@ internal class ChatRecordingController(
             }
             Log.i(
                 "VideoUpload",
-                "round video orientation: lens=BACK sensor=${boundCameraSensorOrientationForLog()} display=${rootDisplayRotationForLog()} inputRotation=${input.metadataRotation} outputRotation=${fixed.metadataRotation} correctionMode=ROTATE_270 input=${segment.file.absolutePath} inputSize=${segment.file.length()} output=${output.absolutePath} outputSize=${output.length()} ms=${System.currentTimeMillis() - start}"
+                "round video orientation: lens=BACK sensor=${boundCameraSensorOrientationForLog()} display=${rootDisplayRotationForLog()} inputRotation=${input.metadataRotation} correctionMode=ROTATE_270 correctedOutputRotation=${fixed.metadataRotation} correctedTrackRotation=${fixed.trackRotation} correctedFrameWidth=${fixed.frameWidth} correctedFrameHeight=${fixed.frameHeight} input=${segment.file.absolutePath} inputSize=${segment.file.length()} output=${output.absolutePath} outputSize=${output.length()} ms=${System.currentTimeMillis() - start}"
             )
             return segment.copy(file = output, durationUs = readVideoDurationUs(output))
         }
@@ -829,7 +829,11 @@ internal class ChatRecordingController(
             try {
                 muxer.setOrientationHint(orientation)
                 for (trackIndex in 0 until extractor.trackCount) {
-                    trackIndexMap[trackIndex] = muxer.addTrack(extractor.getTrackFormat(trackIndex))
+                    val format = extractor.getTrackFormat(trackIndex)
+                    if (format.getString(MediaFormat.KEY_MIME).orEmpty().startsWith("video/")) {
+                        format.setInteger(MediaFormat.KEY_ROTATION, orientation)
+                    }
+                    trackIndexMap[trackIndex] = muxer.addTrack(format)
                 }
                 muxer.start()
                 val buffer = ByteBuffer.allocate(1024 * 1024)
@@ -857,25 +861,29 @@ internal class ChatRecordingController(
         }
     }
 
-    private fun concatMp4Segments(segments: List<File>, output: File) {
+    private fun concatMp4Segments(segments: List<VideoSegment>, output: File) {
         require(segments.isNotEmpty())
-        val normalizedRotation = commonSegmentRotation(segments) ?: readSegmentRotation(segments.first())
-        val firstTracks = readTrackFormats(segments.first())
+        val firstTracks = readTrackFormats(segments.first().file)
         try {
             val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             try {
-                muxer.setOrientationHint(normalizedRotation)
-                val outputVideoTrack = firstTracks.videoFormat?.let { muxer.addTrack(it) } ?: -1
+                // All round-video segments are normalized to upright pixels before concat; final container rotation must be 0.
+                muxer.setOrientationHint(0)
+                val outputVideoTrack = firstTracks.videoFormat?.let {
+                    it.setInteger(MediaFormat.KEY_ROTATION, 0)
+                    muxer.addTrack(it)
+                } ?: -1
                 val outputAudioTrack = firstTracks.audioFormat?.let { muxer.addTrack(it) } ?: -1
                 muxer.start()
                 val buffer = ByteBuffer.allocate(1024 * 1024)
                 val info = MediaCodec.BufferInfo()
                 val offsets = ConcatOffsets()
-                Log.i("VideoUpload", "concat input count=${segments.size} paths=${segments.joinToString { it.absolutePath }}")
+                Log.i("VideoUpload", "concat input count=${segments.size} paths=${segments.joinToString { it.file.absolutePath }}")
                 segments.forEachIndexed { index, segment ->
-                    val durationUs = readVideoDurationUs(segment)
-                    Log.i("VideoUpload", "concat input index=$index durationUs=$durationUs size=${segment.length()} path=${segment.absolutePath}")
-                    appendSegmentToMuxer(segment, muxer, outputVideoTrack, outputAudioTrack, offsets, buffer, info)
+                    val durationUs = readVideoDurationUs(segment.file)
+                    val rotation = readSegmentRotation(segment.file)
+                    Log.i("VideoUpload", "concat input index=$index lensFacing=${segment.lensFacing} durationUs=$durationUs rotation=$rotation size=${segment.file.length()} path=${segment.file.absolutePath}")
+                    appendSegmentToMuxer(segment.file, muxer, outputVideoTrack, outputAudioTrack, offsets, buffer, info)
                 }
                 muxer.stop()
                 val outTracks = readTrackFormats(output)
@@ -888,11 +896,6 @@ internal class ChatRecordingController(
             }
         } finally {
         }
-    }
-
-    private fun commonSegmentRotation(segments: List<File>): Int? {
-        val rotations = segments.map { readSegmentRotation(it) }.distinct()
-        return rotations.singleOrNull()
     }
 
     private fun readSegmentRotation(segment: File): Int {
