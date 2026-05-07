@@ -386,6 +386,7 @@ internal object RoundVideoOrientationFixer {
     private fun textureBufferFor(inputRotation: Int): FloatBuffer {
         return when (inputRotation) {
             90 -> floatBuffer(0f, 1f, 0f, 0f, 1f, 1f, 1f, 0f)
+            180 -> floatBuffer(1f, 0f, 0f, 0f, 1f, 1f, 0f, 1f)
             270 -> floatBuffer(1f, 0f, 1f, 1f, 0f, 0f, 0f, 1f)
             else -> floatBuffer(1f, 1f, 0f, 1f, 1f, 0f, 0f, 0f)
         }
