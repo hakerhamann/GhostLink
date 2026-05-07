@@ -107,6 +107,7 @@ class MessageAdapter(
                 onAutoPlayVideo = { textureView -> roundVideoPlayer.autoplay(item, textureView) },
                 onAttachVideo = { textureView -> roundVideoPlayer.attachTexture(item, textureView) },
                 onDetachVideo = { textureView -> roundVideoPlayer.detachTexture(textureView) },
+                onCollapseExpandedByGesture = { roundVideoPlayer.collapseExpandedByGesture(item) },
                 onCancelVideoUpload = onCancelVideoUpload,
                 onCachedVideoReady = { id -> notifyMessageChanged(id) },
                 availableChatWidthPx = holder.availableRoundVideoWidthPx(stableRoundVideoWidth()),
@@ -131,6 +132,7 @@ class MessageAdapter(
                 onAutoPlayVideo = { textureView -> roundVideoPlayer.autoplay(item, textureView) },
                 onAttachVideo = { textureView -> roundVideoPlayer.attachTexture(item, textureView) },
                 onDetachVideo = { textureView -> roundVideoPlayer.detachTexture(textureView) },
+                onCollapseExpandedByGesture = { roundVideoPlayer.collapseExpandedByGesture(item) },
                 onCancelVideoUpload = onCancelVideoUpload,
                 onCachedVideoReady = { id -> notifyMessageChanged(id) },
                 availableChatWidthPx = holder.availableRoundVideoWidthPx(stableRoundVideoWidth()),
@@ -446,6 +448,7 @@ class MessageAdapter(
             onAutoPlayVideo: (TextureView) -> Unit,
             onAttachVideo: (TextureView) -> Unit,
             onDetachVideo: (TextureView) -> Unit,
+            onCollapseExpandedByGesture: () -> Boolean,
             onCancelVideoUpload: (String) -> Unit,
             onCachedVideoReady: (String) -> Unit,
             availableChatWidthPx: Int,
@@ -552,6 +555,7 @@ class MessageAdapter(
                         onCancelUpload = onCancelVideoUpload,
                         onAttachTexture = onAttachVideo,
                         onDetachTexture = onDetachVideo,
+                        onCollapseExpandedByGesture = onCollapseExpandedByGesture,
                         availableChatWidthPx = availableChatWidthPx,
                         onCachedVideoReady = onCachedVideoReady
                     )
@@ -684,6 +688,7 @@ class MessageAdapter(
             onAutoPlayVideo: (TextureView) -> Unit,
             onAttachVideo: (TextureView) -> Unit,
             onDetachVideo: (TextureView) -> Unit,
+            onCollapseExpandedByGesture: () -> Boolean,
             onCancelVideoUpload: (String) -> Unit,
             onCachedVideoReady: (String) -> Unit,
             availableChatWidthPx: Int,
@@ -768,6 +773,7 @@ class MessageAdapter(
                         onCancelUpload = onCancelVideoUpload,
                         onAttachTexture = onAttachVideo,
                         onDetachTexture = onDetachVideo,
+                        onCollapseExpandedByGesture = onCollapseExpandedByGesture,
                         availableChatWidthPx = availableChatWidthPx,
                         onCachedVideoReady = onCachedVideoReady
                     )

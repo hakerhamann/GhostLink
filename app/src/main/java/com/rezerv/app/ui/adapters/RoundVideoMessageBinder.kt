@@ -1,6 +1,7 @@
 package com.rezerv.app.ui.adapters
 
 import android.view.TextureView
+import android.view.MotionEvent
 import android.view.View
 import android.widget.ImageView
 import android.widget.TextView
@@ -10,6 +11,7 @@ import com.rezerv.app.data.model.MessageSendState
 import com.rezerv.app.data.model.MessageType
 import com.rezerv.app.ui.widget.RoundVideoProgressView
 import com.rezerv.app.util.ImageThumbnailLoader
+import kotlin.math.abs
 
 internal object RoundVideoMessageBinder {
     fun bind(
@@ -29,6 +31,7 @@ internal object RoundVideoMessageBinder {
         onCancelUpload: (String) -> Unit,
         onAttachTexture: (TextureView) -> Unit,
         onDetachTexture: (TextureView) -> Unit,
+        onCollapseExpandedByGesture: () -> Boolean,
         availableChatWidthPx: Int,
         @Suppress("UNUSED_PARAMETER")
         onCachedVideoReady: (String) -> Unit
@@ -125,6 +128,44 @@ internal object RoundVideoMessageBinder {
                 { onToggleVideo(textureView) }
             }
         )
+        bindExpandedSwipe(container, playback.isExpanded, onCollapseExpandedByGesture)
+    }
+
+    private fun bindExpandedSwipe(
+        container: View,
+        isExpanded: Boolean,
+        onCollapseExpandedByGesture: () -> Boolean
+    ) {
+        if (!isExpanded) {
+            container.setOnTouchListener(null)
+            return
+        }
+        val threshold = 48f * container.resources.displayMetrics.density
+        var downX = 0f
+        var downY = 0f
+        container.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.rawX
+                    downY = event.rawY
+                    view.parent?.requestDisallowInterceptTouchEvent(true)
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val dx = event.rawX - downX
+                    val dy = event.rawY - downY
+                    val collapse = dx > threshold || abs(dy) > threshold
+                    view.parent?.requestDisallowInterceptTouchEvent(false)
+                    if (collapse) onCollapseExpandedByGesture() else view.performClick()
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    view.parent?.requestDisallowInterceptTouchEvent(false)
+                    true
+                }
+                else -> true
+            }
+        }
     }
 
     private fun resizeContainer(container: View, expanded: Boolean, availableChatWidthPx: Int) {
@@ -160,6 +201,7 @@ internal object RoundVideoMessageBinder {
         container.isVisible = false
         container.alpha = 1f
         container.setOnClickListener(null)
+        container.setOnTouchListener(null)
         textureView.alpha = 0f
         placeholderView.isVisible = true
         progressView.setProgressFraction(0f)

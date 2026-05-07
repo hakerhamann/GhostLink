@@ -202,6 +202,12 @@ internal class RoundVideoPlayerController(
 
     fun isExpanded(): Boolean = expandedMessageId != null
 
+    fun collapseExpandedByGesture(item: ChatMessage): Boolean {
+        if (expandedMessageId != item.id) return false
+        collapseExpandedToAutoplay(item, playbackGeneration)
+        return true
+    }
+
     fun isAutoplaying(itemId: String): Boolean = autoplayMessageId == itemId && playbackMode == PlaybackMode.AUTOPLAY_MUTED
 
     fun stopAutoplay() {

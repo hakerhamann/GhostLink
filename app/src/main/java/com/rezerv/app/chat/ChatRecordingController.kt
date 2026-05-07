@@ -732,12 +732,19 @@ internal class ChatRecordingController(
     private fun normalizeRoundVideoForSend(segment: VideoSegment): VideoSegment {
         logRoundVideoDiagnostic(segment, "normalizeRoundVideoForSend")
         if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) {
-            val metadata = readVideoDiagnostics(segment.file)
+            val input = readVideoDiagnostics(segment.file)
+            val output = File(activity.cacheDir, "video_pixel180_${System.currentTimeMillis()}_${segment.file.name}")
+            val start = System.currentTimeMillis()
+            RoundVideoOrientationFixer.pixelRotateBackSegment180(segment.file, output)
+            val fixed = readVideoDiagnostics(output)
+            check(output.exists() && output.length() > 0L && fixed.frameWidth > 0 && fixed.frameHeight > 0) {
+                "pixel180 output not playable"
+            }
             Log.i(
                 "VideoUpload",
-                "round video orientation: lens=BACK sensor=${boundCameraSensorOrientationForLog()} display=${rootDisplayRotationForLog()} inputRotation=${metadata.metadataRotation} outputRotation=${metadata.metadataRotation} fix=none file=${segment.file.absolutePath} size=${segment.file.length()}"
+                "round video orientation: lens=BACK sensor=${boundCameraSensorOrientationForLog()} display=${rootDisplayRotationForLog()} inputRotation=${input.metadataRotation} outputRotation=${fixed.metadataRotation} fix=pixel180 input=${segment.file.absolutePath} inputSize=${segment.file.length()} output=${output.absolutePath} outputSize=${output.length()} ms=${System.currentTimeMillis() - start}"
             )
-            return segment
+            return VideoSegment(output, segment.lensFacing)
         }
         val outputRotation = readSegmentRotation(segment.file)
         val output = File(activity.cacheDir, "video_norm_${System.currentTimeMillis()}_${segment.file.name}")
@@ -758,10 +765,11 @@ internal class ChatRecordingController(
 
     private fun logRoundVideoDiagnostic(segment: VideoSegment, prefix: String) {
         val metadata = readVideoDiagnostics(segment.file)
-        val targetRotation = videoCaptureTargetRotationForLog()
+        val previewTargetRotation = previewTargetRotationForLog()
+        val videoTargetRotation = videoCaptureTargetRotationForLog()
         Log.i(
             "VideoUpload",
-            "$prefix lensFacing=${segment.lensFacing} actualBoundLensFacing=$currentBoundLensFacing file=${segment.file.absolutePath} size=${segment.file.length()} retrieverWidth=${metadata.width} retrieverHeight=${metadata.height} frameWidth=${metadata.frameWidth} frameHeight=${metadata.frameHeight} metadataRotation=${metadata.metadataRotation} trackRotation=${metadata.trackRotation} displayRotation=${rootDisplayRotationForLog()} targetRotation=$targetRotation sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=false outputRotation=${metadata.metadataRotation}"
+            "$prefix lensFacing=${segment.lensFacing} actualBoundLensFacing=$currentBoundLensFacing cameraId=${boundCameraIdForLog()} file=${segment.file.absolutePath} size=${segment.file.length()} retrieverWidth=${metadata.width} retrieverHeight=${metadata.height} frameWidth=${metadata.frameWidth} frameHeight=${metadata.frameHeight} metadataRotation=${metadata.metadataRotation} trackRotation=${metadata.trackRotation} displayRotation=${rootDisplayRotationForLog()} previewTargetRotation=$previewTargetRotation videoCaptureTargetRotation=$videoTargetRotation sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=false outputRotation=${metadata.metadataRotation} fixStrategy=${if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) "pixel180" else "none"}"
         )
     }
 
@@ -771,6 +779,15 @@ internal class ChatRecordingController(
 
     private fun videoCaptureTargetRotationForLog(): Int {
         return runCatching { videoCapture?.targetRotation ?: Surface.ROTATION_0 }.getOrDefault(Surface.ROTATION_0)
+    }
+
+    private fun previewTargetRotationForLog(): Int {
+        return runCatching { videoPreviewUseCase?.targetRotation ?: Surface.ROTATION_0 }.getOrDefault(Surface.ROTATION_0)
+    }
+
+    private fun boundCameraIdForLog(): String? {
+        val cameraInfo = boundCamera?.cameraInfo ?: return null
+        return runCatching { Camera2CameraInfo.from(cameraInfo).cameraId }.getOrNull()
     }
 
     private fun boundCameraSensorOrientationForLog(): Int? {
@@ -785,7 +802,7 @@ internal class ChatRecordingController(
         val metadata = file?.takeIf { it.exists() && it.length() > 0L }?.let { readVideoDiagnostics(it) }
         Log.i(
             "VideoUpload",
-            "$prefix lensFacing=$lensFacing file=${file?.absolutePath.orEmpty()} size=${file?.length() ?: 0L} retrieverWidth=${metadata?.width ?: 0} retrieverHeight=${metadata?.height ?: 0} frameWidth=${metadata?.frameWidth ?: 0} frameHeight=${metadata?.frameHeight ?: 0} metadataRotation=${metadata?.metadataRotation ?: -1} trackRotation=${metadata?.trackRotation} displayRotation=${rootDisplayRotationForLog()} targetRotation=${videoCaptureTargetRotationForLog()} sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=$normalized outputRotation=${metadata?.metadataRotation ?: -1}"
+            "$prefix lensFacing=$lensFacing actualBoundLensFacing=$currentBoundLensFacing cameraId=${boundCameraIdForLog()} file=${file?.absolutePath.orEmpty()} size=${file?.length() ?: 0L} retrieverWidth=${metadata?.width ?: 0} retrieverHeight=${metadata?.height ?: 0} frameWidth=${metadata?.frameWidth ?: 0} frameHeight=${metadata?.frameHeight ?: 0} metadataRotation=${metadata?.metadataRotation ?: -1} trackRotation=${metadata?.trackRotation} displayRotation=${rootDisplayRotationForLog()} previewTargetRotation=${previewTargetRotationForLog()} videoCaptureTargetRotation=${videoCaptureTargetRotationForLog()} sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=$normalized outputRotation=${metadata?.metadataRotation ?: -1} fixStrategy=${if (lensFacing == CameraSelector.LENS_FACING_BACK) "pixel180" else "none"}"
         )
     }
 
