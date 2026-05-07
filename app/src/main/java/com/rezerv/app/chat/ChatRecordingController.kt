@@ -74,6 +74,8 @@ internal class ChatRecordingController(
     private var pendingVideoSendAfterStop: Boolean = false
     private var pendingCameraSwitchAfterFinalize: Boolean = false
     private var isSwitchingCameraDuringVideo: Boolean = false
+    private var switchInProgress: Boolean = false
+    private var resumeAfterSwitch: Boolean = false
     private var boundCamera: Camera? = null
     private var isVideoFlashEnabled: Boolean = false
     private var videoSegments = mutableListOf<File>()
@@ -235,6 +237,8 @@ internal class ChatRecordingController(
     fun switchVideoCamera() {
         if (currentRecordMode != RecordMode.VIDEO) return
         if (isVideoRecording || videoRecording != null) {
+            switchInProgress = true
+            resumeAfterSwitch = true
             pendingCameraSwitchAfterFinalize = true
             isSwitchingCameraDuringVideo = true
             pendingVideoSendAfterStop = false
@@ -500,6 +504,11 @@ internal class ChatRecordingController(
                                     recordingStartedAtMs = System.currentTimeMillis()
                                 }
                                 isVideoRecording = true
+                                if (switchInProgress && resumeAfterSwitch) {
+                                    switchInProgress = false
+                                    resumeAfterSwitch = false
+                                    isSwitchingCameraDuringVideo = false
+                                }
                                 recordingUiHandler.removeCallbacks(recordingTicker)
                                 recordingUiHandler.post(recordingTicker)
                                 val elapsedSec = ((System.currentTimeMillis() - recordingStartedAtMs) / 1000L)
@@ -515,6 +524,17 @@ internal class ChatRecordingController(
                     }
             },
             onError = {
+                if (switchInProgress) {
+                    switchInProgress = false
+                    resumeAfterSwitch = false
+                    isSwitchingCameraDuringVideo = false
+                    Toast.makeText(activity, "Не удалось переключить камеру", Toast.LENGTH_SHORT).show()
+                    val elapsedSec = ((System.currentTimeMillis() - recordingStartedAtMs) / 1000L)
+                        .toInt()
+                        .coerceAtLeast(0)
+                    updateRecordingUi(recording = true, elapsedSec = elapsedSec)
+                    return@ensureVideoCapture
+                }
                 binding.videoRecordingContainer.isVisible = false
                 Toast.makeText(activity, "Не удалось запустить видеозапись", Toast.LENGTH_SHORT).show()
                 updateRecordingUi(recording = false, elapsedSec = 0)
@@ -548,34 +568,32 @@ internal class ChatRecordingController(
         val file = videoRecordFile
         val shouldSend = pendingVideoSendAfterStop
         val durationSec = ((System.currentTimeMillis() - recordingStartedAtMs) / 1000L).toInt().coerceAtLeast(0)
-        val shouldSwitchCamera = pendingCameraSwitchAfterFinalize
+        val shouldSwitchCamera = pendingCameraSwitchAfterFinalize || switchInProgress
 
         isVideoRecording = false
-        recordingUiHandler.removeCallbacks(recordingTicker)
+        if (!shouldSwitchCamera) {
+            recordingUiHandler.removeCallbacks(recordingTicker)
+        }
         videoRecording = null
         videoRecordFile = null
 
         if (shouldSwitchCamera) {
             pendingCameraSwitchAfterFinalize = false
-            if (event.hasError() || file == null || !file.exists() || file.length() <= 0L) {
+            val validFile = file?.takeIf { it.exists() && it.length() > 0L }
+            if (validFile != null) {
+                videoSegments += validFile
+            } else {
                 runCatching { file?.delete() }
-                deleteVideoSegments()
-                isSwitchingCameraDuringVideo = false
-                recordingStartedAtMs = 0L
-                updateRecordingUi(recording = false, elapsedSec = 0)
-                Toast.makeText(activity, "Ошибка видеозаписи", Toast.LENGTH_SHORT).show()
-                return
+                Toast.makeText(activity, "Не удалось сохранить фрагмент", Toast.LENGTH_SHORT).show()
             }
-            videoSegments += file
             if (!switchVideoCameraNow()) {
-                deleteVideoSegments()
-                isSwitchingCameraDuringVideo = false
-                recordingStartedAtMs = 0L
-                updateRecordingUi(recording = false, elapsedSec = 0)
                 Toast.makeText(activity, "Не удалось переключить камеру", Toast.LENGTH_SHORT).show()
-                return
             }
-            isSwitchingCameraDuringVideo = false
+            val elapsedSec = ((System.currentTimeMillis() - recordingStartedAtMs) / 1000L)
+                .toInt()
+                .coerceAtLeast(0)
+            isVideoRecording = true
+            updateRecordingUi(recording = true, elapsedSec = elapsedSec)
             startVideoSegment(resetTimer = false)
             return
         }
@@ -845,6 +863,8 @@ internal class ChatRecordingController(
         videoRecording = null
         pendingCameraSwitchAfterFinalize = false
         isSwitchingCameraDuringVideo = false
+        switchInProgress = false
+        resumeAfterSwitch = false
         runCatching { videoRecordFile?.delete() }
         videoRecordFile = null
         deleteVideoSegments()

@@ -33,6 +33,8 @@ internal class RoundVideoPlayerController(
     private var completedMessageId: String? = null
     private var autoplayMessageId: String? = null
     private var expandedMessageId: String? = null
+    private var playbackMode: PlaybackMode = PlaybackMode.NONE
+    private var playbackGeneration: Long = 0L
     private var overlayUntilMs: Long = 0L
     private var boundTextureView: TextureView? = null
     private var surface: Surface? = null
@@ -100,17 +102,8 @@ internal class RoundVideoPlayerController(
         val player = mediaPlayer
         if (activeMessageId == item.id && player != null) {
             attachTextureView(textureView)
-            if (autoplayMessageId == item.id) {
-                autoplayMessageId = null
-                expandedMessageId = item.id
-                runCatching {
-                    player.isLooping = false
-                    player.setVolume(1f, 1f)
-                    player.seekTo(0)
-                }
-                shouldStartWhenReady = true
-                startIfReady()
-                notifyMessageChanged(item.id)
+            if (playbackMode == PlaybackMode.AUTOPLAY_MUTED && autoplayMessageId == item.id) {
+                transitionToExpandedPlayback(item, player)
                 return
             }
             if (preparingMessageId == item.id) {
@@ -149,6 +142,8 @@ internal class RoundVideoPlayerController(
         overlayUntilMs = System.currentTimeMillis() + TAP_OVERLAY_MS
         autoplayMessageId = null
         expandedMessageId = item.id
+        playbackMode = PlaybackMode.PREPARING
+        nextGeneration()
         shouldStartWhenReady = true
         prepared = false
         videoWidth = 0
@@ -171,6 +166,8 @@ internal class RoundVideoPlayerController(
         completedMessageId = null
         autoplayMessageId = item.id
         expandedMessageId = null
+        playbackMode = PlaybackMode.AUTOPLAY_MUTED
+        nextGeneration()
         overlayUntilMs = 0L
         shouldStartWhenReady = true
         prepared = false
@@ -208,19 +205,21 @@ internal class RoundVideoPlayerController(
             return
         }
 
+        playbackMode = PlaybackMode.DOWNLOADING
+        val downloadGeneration = nextGeneration()
         downloadingMessageId = item.id
         preparingMessageId = null
         notifyMessageChanged(item.id)
         scope.launch {
             val file = RoundVideoCache.fileFor(boundTextureView?.context ?: return@launch, videoUrl) { progress ->
                 progressHandler.post {
-                    if (activeMessageId == item.id) {
+                    if (!isStale(downloadGeneration, item.id) && playbackMode == PlaybackMode.DOWNLOADING) {
                         downloadProgress = progress
                         notifyMessageChanged(item.id)
                     }
                 }
             }
-            if (activeMessageId != item.id) return@launch
+            if (isStale(downloadGeneration, item.id) || playbackMode != PlaybackMode.DOWNLOADING) return@launch
             downloadingMessageId = null
             downloadProgress = null
             if (file == null) {
@@ -231,6 +230,8 @@ internal class RoundVideoPlayerController(
                 return@launch
             }
             preparingMessageId = item.id
+            playbackMode = PlaybackMode.PREPARING
+            nextGeneration()
             notifyMessageChanged(item.id)
             createPlayer(item, file.absolutePath, autoplay = false)
         }
@@ -245,6 +246,8 @@ internal class RoundVideoPlayerController(
     }
 
     private fun createPlayer(item: ChatMessage, dataSource: String, autoplay: Boolean) {
+        val generation = nextGeneration()
+        playbackMode = if (autoplay) PlaybackMode.AUTOPLAY_MUTED else PlaybackMode.PREPARING
         runCatching {
             MediaPlayer().apply {
                 setAudioAttributes(
@@ -260,40 +263,38 @@ internal class RoundVideoPlayerController(
                     runCatching { setSurface(currentSurface) }.getOrThrow()
                 }
                 setOnPreparedListener { player ->
-                    if (activeMessageId != item.id) {
+                    if (isStale(generation, item.id)) {
                         runCatching { player.release() }
                         return@setOnPreparedListener
                     }
                     prepared = true
                     preparingMessageId = null
+                    playbackMode = if (autoplayMessageId == item.id) {
+                        PlaybackMode.AUTOPLAY_MUTED
+                    } else {
+                        PlaybackMode.EXPANDED_PLAYING
+                    }
                     this@RoundVideoPlayerController.videoWidth = player.videoWidth
                     this@RoundVideoPlayerController.videoHeight = player.videoHeight
                     boundTextureView?.let { applyCenterCrop(it) }
-                    startIfReady()
+                    startIfReady(generation, item.id)
                     notifyMessageChanged(item.id)
                 }
                 setOnCompletionListener {
-                    if (activeMessageId == item.id) {
-                        if (expandedMessageId == item.id) {
-                            expandedMessageId = null
-                            autoplayMessageId = item.id
-                            runCatching {
-                                it.isLooping = true
-                                it.setVolume(0f, 0f)
-                                it.seekTo(0)
-                                it.start()
-                            }
-                            shouldStartWhenReady = true
-                            completedMessageId = null
-                        } else {
-                            shouldStartWhenReady = false
-                            completedMessageId = item.id
-                        }
-                        progressHandler.removeCallbacks(progressUpdater)
-                        notifyMessageChanged(item.id)
+                    if (isStale(generation, item.id)) return@setOnCompletionListener
+                    if (playbackMode != PlaybackMode.EXPANDED_PLAYING || expandedMessageId != item.id) {
+                        return@setOnCompletionListener
+                    }
+                    collapseExpandedToAutoplay(item, it, generation)
+                }
+                setOnSeekCompleteListener {
+                    if (isStale(generation, item.id)) return@setOnSeekCompleteListener
+                    if (playbackMode == PlaybackMode.EXPANDED_PLAYING || playbackMode == PlaybackMode.AUTOPLAY_MUTED) {
+                        startIfReady(generation, item.id)
                     }
                 }
                 setOnErrorListener { _, _, _ ->
+                    if (isStale(generation, item.id)) return@setOnErrorListener true
                     errorMessageId = item.id
                     releasePlayerOnly()
                     detachBoundTexture()
@@ -360,10 +361,11 @@ internal class RoundVideoPlayerController(
             }
         }
         boundTextureView?.let { applyCenterCrop(it) }
-        startIfReady()
+        startIfReady(playbackGeneration, activeMessageId)
     }
 
-    private fun startIfReady() {
+    private fun startIfReady(expectedGeneration: Long = playbackGeneration, expectedMessageId: String? = activeMessageId) {
+        if (expectedGeneration != playbackGeneration || expectedMessageId != activeMessageId) return
         val player = mediaPlayer ?: return
         if (!prepared || surface == null || !shouldStartWhenReady) return
         runCatching { player.start() }.onFailure {
@@ -377,6 +379,7 @@ internal class RoundVideoPlayerController(
     }
 
     private fun release(clearNotifications: Boolean) {
+        nextGeneration()
         val previousActive = activeMessageId
         val previousPreparing = preparingMessageId
         progressHandler.removeCallbacks(progressUpdater)
@@ -391,6 +394,9 @@ internal class RoundVideoPlayerController(
         downloadingMessageId = null
         downloadProgress = null
         completedMessageId = null
+        autoplayMessageId = null
+        expandedMessageId = null
+        playbackMode = PlaybackMode.NONE
         overlayUntilMs = 0L
         prepared = false
         shouldStartWhenReady = false
@@ -403,11 +409,70 @@ internal class RoundVideoPlayerController(
     }
 
     private fun releasePlayerOnly() {
+        nextGeneration()
         progressHandler.removeCallbacks(progressUpdater)
         runCatching { mediaPlayer?.release() }
         mediaPlayer = null
         prepared = false
         shouldStartWhenReady = false
+        playbackMode = PlaybackMode.NONE
+    }
+
+    private fun transitionToExpandedPlayback(item: ChatMessage, player: MediaPlayer) {
+        val generation = nextGeneration()
+        autoplayMessageId = null
+        expandedMessageId = item.id
+        playbackMode = PlaybackMode.EXPANDED_PLAYING
+        completedMessageId = null
+        shouldStartWhenReady = false
+        overlayUntilMs = System.currentTimeMillis() + TAP_OVERLAY_MS
+        runCatching {
+            if (player.isPlaying) player.pause()
+            player.isLooping = false
+            player.setVolume(1f, 1f)
+            player.setOnSeekCompleteListener {
+                if (isStale(generation, item.id) || playbackMode != PlaybackMode.EXPANDED_PLAYING) return@setOnSeekCompleteListener
+                shouldStartWhenReady = true
+                startIfReady(generation, item.id)
+            }
+            player.seekTo(0)
+        }.onFailure {
+            failActive(item.id)
+            return
+        }
+        notifyMessageChanged(item.id)
+    }
+
+    private fun collapseExpandedToAutoplay(item: ChatMessage, player: MediaPlayer, generation: Long) {
+        expandedMessageId = null
+        autoplayMessageId = item.id
+        playbackMode = PlaybackMode.AUTOPLAY_MUTED
+        shouldStartWhenReady = false
+        completedMessageId = null
+        progressHandler.removeCallbacks(progressUpdater)
+        runCatching {
+            player.isLooping = true
+            player.setVolume(0f, 0f)
+            player.setOnSeekCompleteListener {
+                if (isStale(generation, item.id) || playbackMode != PlaybackMode.AUTOPLAY_MUTED) return@setOnSeekCompleteListener
+                startIfReady(generation, item.id)
+            }
+            player.seekTo(0)
+            shouldStartWhenReady = true
+        }.onFailure {
+            failActive(item.id)
+            return
+        }
+        notifyMessageChanged(item.id)
+    }
+
+    private fun nextGeneration(): Long {
+        playbackGeneration += 1L
+        return playbackGeneration
+    }
+
+    private fun isStale(generation: Long, messageId: String): Boolean {
+        return generation != playbackGeneration || activeMessageId != messageId
     }
 
     private fun releaseSurface() {
@@ -449,6 +514,14 @@ internal class RoundVideoPlayerController(
     private companion object {
         const val PLAYBACK_TICK_MS = 80L
         const val TAP_OVERLAY_MS = 750L
+    }
+
+    private enum class PlaybackMode {
+        NONE,
+        AUTOPLAY_MUTED,
+        EXPANDED_PLAYING,
+        DOWNLOADING,
+        PREPARING
     }
 }
 

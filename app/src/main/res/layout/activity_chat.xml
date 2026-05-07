@@ -129,6 +129,18 @@
         app:layout_constraintBottom_toTopOf="@id/composerHost"
         app:layout_constraintEnd_toEndOf="parent" />
 
+    <View
+        android:id="@+id/videoFrontFlashOverlay"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="#FFFFFFFF"
+        android:elevation="7dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
     <FrameLayout
         android:id="@+id/videoRecordingContainer"
         android:layout_width="0dp"
@@ -153,13 +165,6 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent" />
         </com.rezerv.app.ui.widget.CircularClipFrameLayout>
-
-        <View
-            android:id="@+id/videoFrontFlashOverlay"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:background="#CCFFFFFF"
-            android:visibility="gone" />
 
         <com.rezerv.app.ui.widget.RoundVideoProgressView
             android:id="@+id/videoRecordingProgress"
@@ -373,6 +378,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginEnd="8dp"
+                    android:elevation="9dp"
                     android:gravity="center"
                     android:orientation="horizontal"
                     android:visibility="gone">
