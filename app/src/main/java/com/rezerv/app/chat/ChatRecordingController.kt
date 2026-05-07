@@ -504,9 +504,7 @@ internal class ChatRecordingController(
         isVideoCancelledBySwipe = false
         videoSegments.clear()
         ensureVideoStartsOnFront(
-            onReady = {
-                startVideoSegment(resetTimer = true)
-            },
+            onReady = { startVideoSegment(resetTimer = true) },
             onError = {
                 binding.videoRecordingContainer.isVisible = false
                 Toast.makeText(activity, "Не удалось запустить видеозапись", Toast.LENGTH_SHORT).show()
@@ -521,10 +519,6 @@ internal class ChatRecordingController(
         ensureVideoCapture(
             onReady = {
                 if (currentBoundLensFacing == CameraSelector.LENS_FACING_FRONT) {
-                    Log.i(
-                        "VideoUpload",
-                        "round video session start forcedFront=true currentBoundLensFacing=$currentBoundLensFacing"
-                    )
                     onReady()
                     return@ensureVideoCapture
                 }
@@ -554,10 +548,6 @@ internal class ChatRecordingController(
                     videoPreviewUseCase = preview
                     videoCapture = capture
                     applyVideoFlash()
-                    Log.i(
-                        "VideoUpload",
-                        "round video session start forcedFront=true currentBoundLensFacing=$currentBoundLensFacing"
-                    )
                 }.onSuccess {
                     onReady()
                 }.onFailure(onError)
@@ -571,12 +561,24 @@ internal class ChatRecordingController(
         ensureVideoCapture(
             onReady = { capture ->
                 videoPreviewUseCase?.let { preview -> applyVideoTargetRotation(preview, capture) }
+                if (resetTimer && currentBoundLensFacing != CameraSelector.LENS_FACING_FRONT) {
+                    Log.e("VideoUpload", "unexpected first BACK segment; forcing front-start failed")
+                    binding.videoRecordingContainer.isVisible = false
+                    updateRecordingUi(recording = false, elapsedSec = 0)
+                    return@ensureVideoCapture
+                }
                 val tempFile = File(activity.cacheDir, "video_${System.currentTimeMillis()}.mp4")
                 val outputOptions = FileOutputOptions.Builder(tempFile).build()
                 pendingVideoSendAfterStop = true
                 videoRecordFile = tempFile
                 videoRecordFacing = currentBoundLensFacing
-                logRoundVideoOrientation("record start forcedFront=${resetTimer && videoRecordFacing == CameraSelector.LENS_FACING_FRONT}", videoRecordFacing, tempFile, false)
+                if (resetTimer) {
+                    Log.i("VideoUpload", "round video session start forcedFront=true")
+                }
+                Log.i(
+                    "VideoUpload",
+                    "round video segment start index=${videoSegments.size} lensFacing=$videoRecordFacing path=${tempFile.absolutePath}"
+                )
 
                 videoRecording = capture.output
                     .prepareRecording(activity, outputOptions)
@@ -674,7 +676,7 @@ internal class ChatRecordingController(
                 )
                 Log.i(
                     "VideoUpload",
-                    "segment finalized switch index=${videoSegments.lastIndex} facing=$videoRecordFacing size=${validFile.length()} durationUs=${videoSegments.last().durationUs ?: 0L} path=${validFile.absolutePath}"
+                    "round video segment index=${videoSegments.lastIndex} lensFacing=$videoRecordFacing durationUs=${videoSegments.last().durationUs ?: 0L} path=${validFile.absolutePath}"
                 )
             } else {
                 runCatching { file?.delete() }
@@ -724,7 +726,7 @@ internal class ChatRecordingController(
         )
         Log.i(
             "VideoUpload",
-            "record finalized file=${file.absolutePath} size=${file.length()} durationSec=$durationSec segments=${videoSegments.size}"
+            "round video segment index=${videoSegments.lastIndex} lensFacing=$videoRecordFacing durationUs=${videoSegments.last().durationUs ?: 0L} path=${file.absolutePath}"
         )
         finalizeVideoSegmentsForSend(durationSec.coerceAtMost(MAX_VIDEO_RECORD_DURATION_SEC))
     }
@@ -744,7 +746,7 @@ internal class ChatRecordingController(
                     if (segments.size == 1) {
                         val segment = segments.first()
                         if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) {
-                            Log.w("VideoUpload", "unexpected single_back_after_front_lock")
+                            Log.e("VideoUpload", "unexpected first BACK segment; forcing front-start failed")
                             normalizeRoundVideoForSend(segment, index = 0).file.takeIf { it.exists() && it.length() > 0L }
                         } else {
                             val metadataRotation = readSegmentRotation(segment.file)
@@ -771,11 +773,10 @@ internal class ChatRecordingController(
                             segments
                         }
                         val output = File(activity.cacheDir, "video_merged_${System.currentTimeMillis()}.mp4")
-                        val concatStart = System.currentTimeMillis()
                         concatMp4Segments(normalized.map { it.file }, output)
                         Log.i(
                             "VideoUpload",
-                            "concat end ms=${System.currentTimeMillis() - concatStart} segments=${normalized.size} outputSize=${output.length()}"
+                            "concat input count=${normalized.size}/output durationUs=${readVideoDurationUs(output)} size=${output.length()}"
                         )
                         normalized.forEach { segment ->
                             if (segment.file !in segments.map { it.file }) runCatching { segment.file.delete() }
@@ -820,7 +821,6 @@ internal class ChatRecordingController(
         if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) {
             val input = readVideoDiagnostics(segment.file)
             val output = File(activity.cacheDir, "video_pixel180_${System.currentTimeMillis()}_${segment.file.name}")
-            val start = System.currentTimeMillis()
             RoundVideoOrientationFixer.pixelRotateBackSegment180(segment.file, output)
             val fixed = readVideoDiagnostics(output)
             check(output.exists() && output.length() > 0L && fixed.frameWidth > 0 && fixed.frameHeight > 0) {
@@ -830,20 +830,11 @@ internal class ChatRecordingController(
                 "VideoUpload",
                 "round video segment index=$index lensFacing=${segment.lensFacing} metadataRotation=${input.metadataRotation} correctionMode=ROTATE_270"
             )
-            Log.i(
-                "VideoUpload",
-                "round video orientation: lens=BACK sensor=${boundCameraSensorOrientationForLog()} display=${rootDisplayRotationForLog()} inputRotation=${input.metadataRotation} outputRotation=${fixed.metadataRotation} correctionMode=ROTATE_270 input=${segment.file.absolutePath} inputSize=${segment.file.length()} output=${output.absolutePath} outputSize=${output.length()} ms=${System.currentTimeMillis() - start}"
-            )
             return segment.copy(file = output, durationUs = readVideoDurationUs(output))
         }
         val outputRotation = readSegmentRotation(segment.file)
         val output = File(activity.cacheDir, "video_norm_${System.currentTimeMillis()}_${segment.file.name}")
-        val start = System.currentTimeMillis()
         remuxVideoWithOrientation(segment.file, output, outputRotation)
-        Log.i(
-            "VideoUpload",
-            "normalize end ms=${System.currentTimeMillis() - start} inputSize=${segment.file.length()} outputSize=${output.length()}"
-        )
         Log.i(
             "VideoUpload",
             "round video segment index=$index lensFacing=${segment.lensFacing} metadataRotation=$outputRotation correctionMode=NONE"

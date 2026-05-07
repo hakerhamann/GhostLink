@@ -1,1 +1,0 @@
-& rg -n 'switchVideoCamera|handleVideoFinalize|pendingCameraSwitch|frontFlash|videoFrontFlashOverlay|startVideoSegment|delete.*segment|videoSegments|updateRecordingUi' 'app/src/main/java/com/rezerv/app/chat/ChatRecordingController.kt' 'app/src/main/res/layout/activity_chat.xml'
