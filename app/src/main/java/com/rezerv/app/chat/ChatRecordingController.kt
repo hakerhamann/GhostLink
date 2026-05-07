@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.res.ColorStateList
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.hardware.camera2.CameraCharacteristics
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -24,6 +25,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.core.Camera
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
@@ -74,6 +76,7 @@ internal class ChatRecordingController(
     private var videoRecordFile: File? = null
     private var videoRecordFacing: Int = CameraSelector.LENS_FACING_FRONT
     private var videoCameraFacing: Int = CameraSelector.LENS_FACING_FRONT
+    private var currentBoundLensFacing: Int = CameraSelector.LENS_FACING_FRONT
     private var isVideoRecording: Boolean = false
     private var pendingVideoSendAfterStop: Boolean = false
     private var pendingCameraSwitchAfterFinalize: Boolean = false
@@ -351,7 +354,6 @@ internal class ChatRecordingController(
 
     private fun switchVideoCameraNow(): Boolean {
         val provider = cameraProvider ?: return false
-        val preview = videoPreviewUseCase ?: return false
         videoCapture ?: return false
         val nextFacing = if (videoCameraFacing == CameraSelector.LENS_FACING_FRONT) {
             CameraSelector.LENS_FACING_BACK
@@ -359,20 +361,28 @@ internal class ChatRecordingController(
             CameraSelector.LENS_FACING_FRONT
         }
         val selector = CameraSelector.Builder().requireLensFacing(nextFacing).build()
+        val previousBoundFacing = currentBoundLensFacing
         return runCatching {
+            val preview = Preview.Builder().build().apply {
+                setSurfaceProvider(binding.videoRecordingPreview.surfaceProvider)
+            }
             val recorder = Recorder.Builder()
                 .setQualitySelector(QualitySelector.from(Quality.LOWEST))
                 .setTargetVideoEncodingBitRate(800_000)
                 .build()
             val capture = VideoCapture.withOutput(recorder)
-            applyVideoTargetRotation(preview, capture)
+            applyVideoTargetRotation(preview, capture, nextFacing)
             provider.unbindAll()
             boundCamera = provider.bindToLifecycle(activity, selector, preview, capture)
+            currentBoundLensFacing = nextFacing
             videoCameraFacing = nextFacing
+            logRoundVideoOrientation("camera switched", nextFacing, null, false)
+            videoPreviewUseCase = preview
             videoCapture = capture
             applyVideoFlash()
             true
         }.getOrElse {
+            currentBoundLensFacing = previousBoundFacing
             false
         }
     }
@@ -500,12 +510,13 @@ internal class ChatRecordingController(
     private fun startVideoSegment(resetTimer: Boolean) {
         ensureVideoCapture(
             onReady = { capture ->
-                videoPreviewUseCase?.let { preview -> applyVideoTargetRotation(preview, capture) }
+                videoPreviewUseCase?.let { preview -> applyVideoTargetRotation(preview, capture, currentBoundLensFacing) }
                 val tempFile = File(activity.cacheDir, "video_${System.currentTimeMillis()}.mp4")
                 val outputOptions = FileOutputOptions.Builder(tempFile).build()
                 pendingVideoSendAfterStop = true
                 videoRecordFile = tempFile
-                videoRecordFacing = videoCameraFacing
+                videoRecordFacing = currentBoundLensFacing
+                logRoundVideoOrientation("record start", videoRecordFacing, tempFile, false)
 
                 videoRecording = capture.output
                     .prepareRecording(activity, outputOptions)
@@ -721,7 +732,12 @@ internal class ChatRecordingController(
     private fun normalizeRoundVideoForSend(segment: VideoSegment): VideoSegment {
         logRoundVideoDiagnostic(segment, "normalizeRoundVideoForSend")
         if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) {
-            return VideoSegment(normalizeBackCameraSegmentIfNeeded(segment.file), segment.lensFacing)
+            val metadata = readVideoDiagnostics(segment.file)
+            Log.i(
+                "VideoUpload",
+                "round video orientation: lens=BACK sensor=${boundCameraSensorOrientationForLog()} display=${rootDisplayRotationForLog()} inputRotation=${metadata.metadataRotation} outputRotation=${metadata.metadataRotation} fix=targetRotation file=${segment.file.absolutePath} size=${segment.file.length()}"
+            )
+            return segment
         }
         val outputRotation = readSegmentRotation(segment.file)
         val output = File(activity.cacheDir, "video_norm_${System.currentTimeMillis()}_${segment.file.name}")
@@ -732,21 +748,6 @@ internal class ChatRecordingController(
             "normalize end ms=${System.currentTimeMillis() - start} inputSize=${segment.file.length()} outputSize=${output.length()}"
         )
         return VideoSegment(output, segment.lensFacing)
-    }
-
-    private fun normalizeBackCameraSegmentIfNeeded(segment: File): File {
-        // Back camera CameraX output on this app/device needs capture targetRotation refreshed
-        // before each segment and after lens switch; metadata-only +180 made playback worse in TextureView.
-        val metadataRotation = readSegmentRotation(segment)
-        val output = File(activity.cacheDir, "video_back_norm_${System.currentTimeMillis()}_${segment.name}")
-        val start = System.currentTimeMillis()
-        remuxVideoWithOrientation(segment, output, metadataRotation)
-        val outputRotation = readSegmentRotation(output)
-        Log.i(
-            "VideoUpload",
-            "normalizeBackCameraSegmentIfNeeded inputRotation=$metadataRotation outputRotation=$outputRotation differs=${metadataRotation != outputRotation} ms=${System.currentTimeMillis() - start} inputSize=${segment.length()} outputSize=${output.length()}"
-        )
-        return output.takeIf { it.exists() && it.length() > 0L } ?: segment
     }
 
     private fun logFinalizedVideoSegments(segments: List<VideoSegment>) {
@@ -760,7 +761,7 @@ internal class ChatRecordingController(
         val targetRotation = videoCaptureTargetRotationForLog()
         Log.i(
             "VideoUpload",
-            "$prefix lensFacing=${segment.lensFacing} singleSegment=${videoSegments.size <= 1} file=${segment.file.absolutePath} size=${segment.file.length()} metadataRotation=${metadata.metadataRotation} retrieverWidth=${metadata.width} retrieverHeight=${metadata.height} trackRotation=${metadata.trackRotation} displayRotation=${rootDisplayRotationForLog()} targetRotation=$targetRotation normalizedDiffers=${metadata.metadataRotation != normalizeRotation(metadata.metadataRotation)}"
+            "$prefix lensFacing=${segment.lensFacing} actualBoundLensFacing=$currentBoundLensFacing file=${segment.file.absolutePath} size=${segment.file.length()} retrieverWidth=${metadata.width} retrieverHeight=${metadata.height} frameWidth=${metadata.frameWidth} frameHeight=${metadata.frameHeight} metadataRotation=${metadata.metadataRotation} trackRotation=${metadata.trackRotation} displayRotation=${rootDisplayRotationForLog()} targetRotation=$targetRotation sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=false outputRotation=${metadata.metadataRotation}"
         )
     }
 
@@ -770,6 +771,22 @@ internal class ChatRecordingController(
 
     private fun videoCaptureTargetRotationForLog(): Int {
         return runCatching { videoCapture?.targetRotation ?: Surface.ROTATION_0 }.getOrDefault(Surface.ROTATION_0)
+    }
+
+    private fun boundCameraSensorOrientationForLog(): Int? {
+        val cameraInfo = boundCamera?.cameraInfo ?: return null
+        return runCatching {
+            Camera2CameraInfo.from(cameraInfo)
+                .getCameraCharacteristic(CameraCharacteristics.SENSOR_ORIENTATION)
+        }.getOrNull()
+    }
+
+    private fun logRoundVideoOrientation(prefix: String, lensFacing: Int, file: File?, normalized: Boolean) {
+        val metadata = file?.takeIf { it.exists() && it.length() > 0L }?.let { readVideoDiagnostics(it) }
+        Log.i(
+            "VideoUpload",
+            "$prefix lensFacing=$lensFacing file=${file?.absolutePath.orEmpty()} size=${file?.length() ?: 0L} retrieverWidth=${metadata?.width ?: 0} retrieverHeight=${metadata?.height ?: 0} frameWidth=${metadata?.frameWidth ?: 0} frameHeight=${metadata?.frameHeight ?: 0} metadataRotation=${metadata?.metadataRotation ?: -1} trackRotation=${metadata?.trackRotation} displayRotation=${rootDisplayRotationForLog()} targetRotation=${videoCaptureTargetRotationForLog()} sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=$normalized outputRotation=${metadata?.metadataRotation ?: -1}"
+        )
     }
 
     private fun remuxVideoWithOrientation(input: File, output: File, orientation: Int) {
@@ -853,10 +870,17 @@ internal class ChatRecordingController(
             val retriever = MediaMetadataRetriever()
             try {
                 retriever.setDataSource(segment.absolutePath)
-                Triple(
-                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull(),
-                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0,
-                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                val frame = runCatching { retriever.getFrameAtTime(0L) }.getOrNull()
+                VideoDiagnostics(
+                    metadataRotation = normalizeRotation(
+                        retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                    ),
+                    width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                        ?.toIntOrNull() ?: 0,
+                    height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0,
+                    frameWidth = frame?.width ?: 0,
+                    frameHeight = frame?.height ?: 0,
+                    trackRotation = null
                 )
             } finally {
                 retriever.release()
@@ -879,9 +903,11 @@ internal class ChatRecordingController(
             extractor.release()
         }
         return VideoDiagnostics(
-            metadataRotation = normalizeRotation(metadata?.first ?: trackRotation ?: 0),
-            width = metadata?.second ?: 0,
-            height = metadata?.third ?: 0,
+            metadataRotation = normalizeRotation(metadata?.metadataRotation ?: trackRotation ?: 0),
+            width = metadata?.width ?: 0,
+            height = metadata?.height ?: 0,
+            frameWidth = metadata?.frameWidth ?: 0,
+            frameHeight = metadata?.frameHeight ?: 0,
             trackRotation = trackRotation
         )
     }
@@ -954,7 +980,7 @@ internal class ChatRecordingController(
                     return@addListener
                 }
                 runCatching {
-                    val preview = videoPreviewUseCase ?: Preview.Builder().build().apply {
+                    val preview = Preview.Builder().build().apply {
                         setSurfaceProvider(binding.videoRecordingPreview.surfaceProvider)
                     }
                     val recorder = Recorder.Builder()
@@ -962,7 +988,7 @@ internal class ChatRecordingController(
                         .setTargetVideoEncodingBitRate(800_000)
                         .build()
                     val capture = VideoCapture.withOutput(recorder)
-                    applyVideoTargetRotation(preview, capture)
+                    applyVideoTargetRotation(preview, capture, videoCameraFacing)
                     bindVideoUseCases(provider, preview, capture)
                     cameraProvider = provider
                     videoPreviewUseCase = preview
@@ -979,13 +1005,16 @@ internal class ChatRecordingController(
         preview: Preview,
         capture: VideoCapture<Recorder>
     ) {
-        applyVideoTargetRotation(preview, capture)
+        applyVideoTargetRotation(preview, capture, videoCameraFacing)
         val preferredSelector = CameraSelector.Builder()
             .requireLensFacing(videoCameraFacing)
             .build()
         try {
             provider.unbindAll()
             boundCamera = provider.bindToLifecycle(activity, preferredSelector, preview, capture)
+            currentBoundLensFacing = videoCameraFacing
+            applyVideoTargetRotation(preview, capture, currentBoundLensFacing)
+            logRoundVideoOrientation("camera bound", currentBoundLensFacing, null, false)
             applyVideoFlash()
             return
         } catch (_: Throwable) {
@@ -1002,14 +1031,17 @@ internal class ChatRecordingController(
         provider.unbindAll()
         boundCamera = provider.bindToLifecycle(activity, fallbackSelector, preview, capture)
         videoCameraFacing = fallbackFacing
+        currentBoundLensFacing = fallbackFacing
+        applyVideoTargetRotation(preview, capture, fallbackFacing)
+        logRoundVideoOrientation("camera bound fallback", currentBoundLensFacing, null, false)
         applyVideoFlash()
     }
 
     private fun applyVideoFlash() {
         val frontFlashActive = isVideoFlashEnabled &&
             isVideoRecording &&
-            videoCameraFacing == CameraSelector.LENS_FACING_FRONT
-        if (videoCameraFacing == CameraSelector.LENS_FACING_BACK) {
+            currentBoundLensFacing == CameraSelector.LENS_FACING_FRONT
+        if (currentBoundLensFacing == CameraSelector.LENS_FACING_BACK) {
             binding.videoFrontFlashOverlay.isVisible = false
             runCatching { boundCamera?.cameraControl?.enableTorch(isVideoFlashEnabled) }
         } else {
@@ -1030,10 +1062,29 @@ internal class ChatRecordingController(
         binding.btnVideoFlash.bringToFront()
     }
 
-    private fun applyVideoTargetRotation(preview: Preview, capture: VideoCapture<Recorder>) {
-        val rotation = binding.root.display?.rotation ?: Surface.ROTATION_0
+    private fun applyVideoTargetRotation(
+        preview: Preview,
+        capture: VideoCapture<Recorder>,
+        lensFacing: Int = currentBoundLensFacing
+    ) {
+        val displayRotation = binding.root.display?.rotation ?: Surface.ROTATION_0
+        val rotation = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+            oppositeSurfaceRotation(displayRotation)
+        } else {
+            displayRotation
+        }
         preview.targetRotation = rotation
         capture.targetRotation = rotation
+    }
+
+    private fun oppositeSurfaceRotation(rotation: Int): Int {
+        return when (rotation) {
+            Surface.ROTATION_0 -> Surface.ROTATION_180
+            Surface.ROTATION_90 -> Surface.ROTATION_270
+            Surface.ROTATION_180 -> Surface.ROTATION_0
+            Surface.ROTATION_270 -> Surface.ROTATION_90
+            else -> Surface.ROTATION_180
+        }
     }
 
     private fun releaseVideoCapture() {
@@ -1046,6 +1097,7 @@ internal class ChatRecordingController(
         runCatching { videoRecordFile?.delete() }
         videoRecordFile = null
         videoRecordFacing = CameraSelector.LENS_FACING_FRONT
+        currentBoundLensFacing = CameraSelector.LENS_FACING_FRONT
         deleteVideoSegments()
         runCatching { cameraProvider?.unbindAll() }
         boundCamera = null
@@ -1081,6 +1133,8 @@ internal class ChatRecordingController(
         val metadataRotation: Int,
         val width: Int,
         val height: Int,
+        val frameWidth: Int,
+        val frameHeight: Int,
         val trackRotation: Int?
     )
 
