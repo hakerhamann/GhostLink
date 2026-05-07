@@ -2,7 +2,9 @@ package com.rezerv.app.chat
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.res.ColorStateList
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -842,14 +844,25 @@ internal class ChatRecordingController(
     }
 
     private fun applyVideoFlash() {
+        val frontFlashActive = isVideoFlashEnabled &&
+            isVideoRecording &&
+            videoCameraFacing == CameraSelector.LENS_FACING_FRONT
         if (videoCameraFacing == CameraSelector.LENS_FACING_BACK) {
             binding.videoFrontFlashOverlay.isVisible = false
             runCatching { boundCamera?.cameraControl?.enableTorch(isVideoFlashEnabled) }
         } else {
             runCatching { boundCamera?.cameraControl?.enableTorch(false) }
-            binding.videoFrontFlashOverlay.isVisible = isVideoFlashEnabled && isVideoRecording
+            binding.videoFrontFlashOverlay.isVisible = frontFlashActive
         }
+        binding.btnVideoFlash.isSelected = isVideoFlashEnabled
         binding.btnVideoFlash.alpha = if (isVideoFlashEnabled) 1f else 0.65f
+        binding.btnVideoFlash.setTextColor(
+            if (isVideoFlashEnabled) Color.rgb(4, 16, 6) else Color.WHITE
+        )
+        binding.btnVideoFlash.backgroundTintList = ColorStateList.valueOf(
+            if (isVideoFlashEnabled) Color.rgb(255, 236, 120) else Color.argb(210, 18, 24, 21)
+        )
+        binding.btnVideoFlash.bringToFront()
     }
 
     private fun applyVideoTargetRotation(preview: Preview, capture: VideoCapture<Recorder>) {
@@ -871,6 +884,11 @@ internal class ChatRecordingController(
         runCatching { cameraProvider?.unbindAll() }
         boundCamera = null
         isVideoFlashEnabled = false
+        binding.videoFrontFlashOverlay.isVisible = false
+        binding.btnVideoFlash.isSelected = false
+        binding.btnVideoFlash.alpha = 0.65f
+        binding.btnVideoFlash.setTextColor(Color.WHITE)
+        binding.btnVideoFlash.backgroundTintList = ColorStateList.valueOf(Color.argb(210, 18, 24, 21))
         videoPreviewUseCase = null
         videoCapture = null
         binding.videoRecordingContainer.isVisible = false

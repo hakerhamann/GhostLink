@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -1481,6 +1482,12 @@ class ChatActivity : AppCompatActivity() {
             runCatching { file.delete() }
             return
         }
+        if (!file.exists() || file.length() <= 0L) {
+            Log.e("VideoUpload", "Invalid video file: exists=${file.exists()} length=${file.length()}")
+            Toast.makeText(this, getString(R.string.send_message_error), Toast.LENGTH_SHORT).show()
+            runCatching { file.delete() }
+            return
+        }
         val replyTarget = currentReplyTarget()
         val optimisticMessage = buildOptimisticVideoMessage(
             user = user,
@@ -1495,9 +1502,9 @@ class ChatActivity : AppCompatActivity() {
             var cacheReady = false
             var uploadSucceeded = false
             runCatching {
-                val videoUrl = AppContainer.chatRepository.uploadVideo(
+                val videoUrl = AppContainer.chatRepository.uploadVideoFile(
                     chatId = chatId,
-                    videoBytes = file.readBytes(),
+                    file = file,
                     fileName = file.name,
                     onProgress = { progress ->
                         lifecycleScope.launch {
@@ -1526,6 +1533,11 @@ class ChatActivity : AppCompatActivity() {
                     removeOverlayMessage(optimisticMessage.id)
                     return@onFailure
                 }
+                Log.e(
+                    "VideoUpload",
+                    "Video upload failed: ${throwable::class.java.simpleName}: ${throwable.message}",
+                    throwable
+                )
                 markOverlayMessageFailed(optimisticMessage.id)
                 Toast.makeText(
                     this@ChatActivity,
@@ -1536,7 +1548,7 @@ class ChatActivity : AppCompatActivity() {
 
             videoUploadJobsByLocalId.remove(optimisticMessage.id)
             videoUploadFilesByLocalId.remove(optimisticMessage.id)
-            if (cacheReady || !uploadSucceeded || !file.exists()) {
+            if (cacheReady || (uploadSucceeded && !file.exists())) {
                 runCatching { file.delete() }
             }
         }

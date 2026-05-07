@@ -4,6 +4,7 @@ import com.rezerv.app.data.model.ChatMessage
 import com.rezerv.app.network.ApiClient
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 
 internal class ChatMediaRepository(
     private val apiClient: ApiClient
@@ -29,6 +30,22 @@ internal class ChatMediaRepository(
         val response = apiClient.uploadVideo(
             chatId = chatId,
             videoBytes = videoBytes,
+            fileName = fileName,
+            onProgress = onProgress
+        )
+        return response.optString("videoUrl").ifBlank { null }
+            ?: response.optString("fileName").ifBlank { throw IllegalStateException("Video upload failed") }
+    }
+
+    suspend fun uploadVideoFile(
+        chatId: String,
+        file: File,
+        fileName: String,
+        onProgress: ((Float) -> Unit)? = null
+    ): String {
+        val response = apiClient.uploadVideoFile(
+            chatId = chatId,
+            file = file,
             fileName = fileName,
             onProgress = onProgress
         )

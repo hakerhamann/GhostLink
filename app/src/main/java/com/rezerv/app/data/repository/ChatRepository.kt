@@ -15,6 +15,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
 class ChatRepository(
@@ -204,6 +205,15 @@ class ChatRepository(
         onProgress: ((Float) -> Unit)? = null
     ): String {
         return mediaRepository.uploadVideo(chatId, videoBytes, fileName, onProgress)
+    }
+
+    suspend fun uploadVideoFile(
+        chatId: String,
+        file: File,
+        fileName: String,
+        onProgress: ((Float) -> Unit)? = null
+    ): String {
+        return mediaRepository.uploadVideoFile(chatId, file, fileName, onProgress)
     }
 
     suspend fun sendVoiceMessage(

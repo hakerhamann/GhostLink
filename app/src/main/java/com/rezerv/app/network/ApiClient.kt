@@ -7,6 +7,8 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.DataOutputStream
+import java.io.File
+import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -91,6 +93,91 @@ class ApiClient(
         contentType = contentType,
         onProgress = onProgress
     )
+
+    suspend fun uploadVideoFile(
+        chatId: String,
+        file: File,
+        fileName: String = "video.mp4",
+        contentType: String = "video/mp4",
+        onProgress: ((Float) -> Unit)? = null
+    ): JSONObject = uploadMultipartFile(
+        path = "/api/chats/$chatId/video",
+        fieldName = "video",
+        file = file,
+        fileName = fileName,
+        contentType = contentType,
+        onProgress = onProgress
+    )
+
+    suspend fun uploadMultipartFile(
+        path: String,
+        fieldName: String,
+        file: File,
+        fileName: String,
+        contentType: String,
+        onProgress: ((Float) -> Unit)? = null
+    ): JSONObject =
+        withContext(Dispatchers.IO) {
+            require(file.exists() && file.length() > 0L) { "Upload file is empty" }
+            var connection: HttpURLConnection? = null
+            try {
+                val baseUrl = sessionStore.getServerUrl().removeSuffix("/")
+                val safePath = if (path.startsWith("/")) path else "/$path"
+                val url = URL("$baseUrl$safePath")
+                val boundary = "----GhostLinkBoundary${System.currentTimeMillis()}"
+                val fileLength = file.length()
+
+                connection = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 20_000
+                    readTimeout = 20_000
+                    doInput = true
+                    doOutput = true
+                    setRequestProperty("Accept", "application/json")
+                    setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                    sessionStore.authToken()?.let { token ->
+                        setRequestProperty("Authorization", "Bearer $token")
+                    }
+                }
+
+                DataOutputStream(connection.outputStream).use { output ->
+                    output.writeBytes("--$boundary\r\n")
+                    output.writeBytes("Content-Disposition: form-data; name=\"$fieldName\"; filename=\"$fileName\"\r\n")
+                    output.writeBytes("Content-Type: $contentType\r\n\r\n")
+                    val buffer = ByteArray(UPLOAD_CHUNK_BYTES)
+                    var sent = 0L
+                    FileInputStream(file).use { input ->
+                        while (true) {
+                            coroutineContext.ensureActive()
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            output.write(buffer, 0, read)
+                            sent += read.toLong()
+                            onProgress?.invoke(sent.toFloat() / fileLength.toFloat())
+                        }
+                    }
+                    output.writeBytes("\r\n--$boundary--\r\n")
+                    output.flush()
+                }
+
+                val status = connection.responseCode
+                val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+                val body = stream?.use { input ->
+                    BufferedReader(InputStreamReader(input)).readText()
+                }.orEmpty()
+
+                if (status !in 200..299) {
+                    val message = parseErrorMessage(body)
+                    throw ApiException(status, message)
+                }
+
+                if (body.isBlank()) JSONObject() else JSONObject(body)
+            } catch (exception: IOException) {
+                throw connectionException(exception)
+            } finally {
+                connection?.disconnect()
+            }
+        }
 
     private suspend fun uploadMultipartBinary(
         path: String,

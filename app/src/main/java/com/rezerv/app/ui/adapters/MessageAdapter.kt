@@ -14,6 +14,7 @@ import androidx.interpolator.view.animation.FastOutSlowInInterpolator
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import com.rezerv.app.R
 import com.rezerv.app.data.model.ChatMessage
 import com.rezerv.app.data.model.MessageSendState
 import com.rezerv.app.data.model.MessageType
@@ -107,6 +108,7 @@ class MessageAdapter(
                 onDetachVideo = { textureView -> roundVideoPlayer.detachTexture(textureView) },
                 onCancelVideoUpload = onCancelVideoUpload,
                 onCachedVideoReady = { id -> notifyMessageChanged(id) },
+                availableChatWidthPx = stableRoundVideoWidth(),
                 onIncomingAvatarTap = onIncomingAvatarTap,
                 onSenderNameTap = onSenderNameTap,
                 onIncomingMessageTap = onIncomingMessageTap,
@@ -130,6 +132,7 @@ class MessageAdapter(
                 onDetachVideo = { textureView -> roundVideoPlayer.detachTexture(textureView) },
                 onCancelVideoUpload = onCancelVideoUpload,
                 onCachedVideoReady = { id -> notifyMessageChanged(id) },
+                availableChatWidthPx = stableRoundVideoWidth(),
                 onOwnMessageTap = onOwnMessageTap,
                 onReplyPreviewTap = onReplyPreviewTap,
                 onMessageImageTap = onMessageImageTap
@@ -153,6 +156,15 @@ class MessageAdapter(
         recyclerView.removeOnScrollListener(roundVideoScrollListener)
         if (this.recyclerView === recyclerView) this.recyclerView = null
         super.onDetachedFromRecyclerView(recyclerView)
+    }
+
+    private fun stableRoundVideoWidth(): Int {
+        recyclerView?.width?.takeIf { it > 0 }?.let { return it }
+        return recyclerView?.rootView
+            ?.findViewById<RecyclerView>(R.id.recyclerMessages)
+            ?.width
+            ?.takeIf { it > 0 }
+            ?: 0
     }
 
     override fun onViewAttachedToWindow(holder: RecyclerView.ViewHolder) {
@@ -435,6 +447,7 @@ class MessageAdapter(
             onDetachVideo: (TextureView) -> Unit,
             onCancelVideoUpload: (String) -> Unit,
             onCachedVideoReady: (String) -> Unit,
+            availableChatWidthPx: Int,
             onIncomingAvatarTap: (ChatMessage) -> Unit,
             onSenderNameTap: (ChatMessage) -> Unit,
             onIncomingMessageTap: (ChatMessage, Float, Float) -> Unit,
@@ -538,6 +551,7 @@ class MessageAdapter(
                         onCancelUpload = onCancelVideoUpload,
                         onAttachTexture = onAttachVideo,
                         onDetachTexture = onDetachVideo,
+                        availableChatWidthPx = availableChatWidthPx,
                         onCachedVideoReady = onCachedVideoReady
                     )
                 }
@@ -652,6 +666,7 @@ class MessageAdapter(
             onDetachVideo: (TextureView) -> Unit,
             onCancelVideoUpload: (String) -> Unit,
             onCachedVideoReady: (String) -> Unit,
+            availableChatWidthPx: Int,
             onOwnMessageTap: (ChatMessage, Float, Float) -> Unit,
             onReplyPreviewTap: (ChatMessage) -> Unit,
             onMessageImageTap: (ChatMessage, Int, String) -> Unit
@@ -733,6 +748,7 @@ class MessageAdapter(
                         onCancelUpload = onCancelVideoUpload,
                         onAttachTexture = onAttachVideo,
                         onDetachTexture = onDetachVideo,
+                        availableChatWidthPx = availableChatWidthPx,
                         onCachedVideoReady = onCachedVideoReady
                     )
                 }

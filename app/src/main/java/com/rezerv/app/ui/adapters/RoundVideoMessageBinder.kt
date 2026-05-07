@@ -29,6 +29,7 @@ internal object RoundVideoMessageBinder {
         onCancelUpload: (String) -> Unit,
         onAttachTexture: (TextureView) -> Unit,
         onDetachTexture: (TextureView) -> Unit,
+        availableChatWidthPx: Int,
         @Suppress("UNUSED_PARAMETER")
         onCachedVideoReady: (String) -> Unit
     ) {
@@ -53,7 +54,7 @@ internal object RoundVideoMessageBinder {
         val cachedVideo = RoundVideoCache.getCachedFileIfExists(container.context, videoUrl)
         val isLoaded = localVideoPath.isNotBlank() || cachedVideo != null
         container.isVisible = true
-        resizeContainer(container, expanded = playback.isExpanded)
+        resizeContainer(container, expanded = playback.isExpanded, availableChatWidthPx = availableChatWidthPx)
         container.alpha = 1f
         placeholderView.isVisible = true
         val isUploading = item.type == MessageType.VIDEO && item.sendState == MessageSendState.SENDING
@@ -120,19 +121,16 @@ internal object RoundVideoMessageBinder {
         )
     }
 
-    private fun resizeContainer(container: View, expanded: Boolean) {
-        val measuredParentWidth = (container.parent as? View)?.width?.takeIf { it > 0 }
+    private fun resizeContainer(container: View, expanded: Boolean, availableChatWidthPx: Int) {
+        val stableWidth = availableChatWidthPx.takeIf { it > 0 }
         val rootWidth = container.rootView?.width?.takeIf { it > 0 }
         val fallbackWidth = container.resources.displayMetrics.widthPixels
-        val availableWidth = (measuredParentWidth ?: rootWidth ?: fallbackWidth).coerceAtLeast(1)
+        val availableWidth = (stableWidth ?: rootWidth ?: fallbackWidth).coerceAtLeast(1)
         val target = if (expanded) {
             availableWidth
         } else {
             (availableWidth * 0.55f).toInt()
         }.coerceAtLeast(1)
-        if (container.width <= 0 && expanded) {
-            container.post { resizeContainer(container, expanded = true) }
-        }
         val params = container.layoutParams
         if (params.width != target || params.height != target) {
             params.width = target
