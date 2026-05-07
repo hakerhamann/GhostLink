@@ -23,7 +23,20 @@ import java.nio.FloatBuffer
 
 internal object RoundVideoOrientationFixer {
     fun pixelRotateBackSegment180(input: File, output: File) {
-        val correctionMode = CorrectionMode.ROTATE_270
+        pixelNormalizeSegment(input, output, CorrectionMode.ROTATE_270)
+    }
+
+    fun pixelNormalizeFrontSegment(input: File, output: File, metadataRotation: Int) {
+        val correctionMode = when (((metadataRotation % 360) + 360) % 360) {
+            90 -> CorrectionMode.ROTATE_90
+            180 -> CorrectionMode.ROTATE_180
+            270 -> CorrectionMode.ROTATE_270
+            else -> CorrectionMode.NONE
+        }
+        pixelNormalizeSegment(input, output, correctionMode)
+    }
+
+    private fun pixelNormalizeSegment(input: File, output: File, correctionMode: CorrectionMode) {
         val tracks = findTracks(input)
         require(tracks.videoIndex >= 0) { "No video track" }
         val videoFormat = tracks.videoFormat ?: error("No video format")
@@ -131,7 +144,6 @@ internal object RoundVideoOrientationFixer {
                             check(!muxerStarted) { "encoder format changed twice" }
                             val outFormat = encoder.outputFormat
                             if (durationUs > 0L) outFormat.setLong(MediaFormat.KEY_DURATION, durationUs)
-                            outFormat.setInteger(MediaFormat.KEY_ROTATION, 0)
                             videoMuxTrack = muxer.addTrack(outFormat)
                             muxer.start()
                             muxerStarted = true
