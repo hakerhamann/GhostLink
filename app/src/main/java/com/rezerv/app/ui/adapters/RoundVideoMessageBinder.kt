@@ -130,7 +130,7 @@ internal object RoundVideoMessageBinder {
             availableWidth
         } else {
             (availableWidth * 0.55f).toInt()
-        }.coerceAtLeast(1)
+        }.coerceIn(1, availableWidth)
         val params = container.layoutParams
         if (params.width != target || params.height != target) {
             params.width = target

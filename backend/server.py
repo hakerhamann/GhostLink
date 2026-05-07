@@ -77,7 +77,7 @@ FCM_CREDENTIALS_PATH = Path(
 MAX_VOICE_FILE_BYTES = int(os.getenv("MAX_VOICE_FILE_BYTES", str(12 * 1024 * 1024)))
 MAX_VOICE_DURATION_SEC = int(os.getenv("MAX_VOICE_DURATION_SEC", "600"))
 MAX_PHOTO_FILE_BYTES = int(os.getenv("MAX_PHOTO_FILE_BYTES", str(20 * 1024 * 1024)))
-MAX_VIDEO_FILE_BYTES = int(os.getenv("MAX_VIDEO_FILE_BYTES", str(40 * 1024 * 1024)))
+MAX_VIDEO_FILE_BYTES = int(os.getenv("MAX_VIDEO_FILE_BYTES", str(120 * 1024 * 1024)))
 MAX_VIDEO_DURATION_SEC = int(os.getenv("MAX_VIDEO_DURATION_SEC", "60"))
 VOICE_MESSAGE_FALLBACK_TEXT = "\U0001F3A4 Voice message"
 IMAGE_MESSAGE_FALLBACK_TEXT = "\U0001F4F7 \u0424\u043e\u0442\u043e"
@@ -1121,6 +1121,8 @@ def upload_video(chat_id: str):
             return jsonify({"error": "???? ?????????? ????????? ?? ???????"}), 400
         if exc.reason == "empty":
             return jsonify({"error": "???????????? ????????"}), 400
+        if exc.reason == "too_large":
+            return jsonify({"error": "????????? ???? ??????? ???????"}), 413
         return jsonify({"error": "????????? ???? ??????? ???????"}), 400
 
     return jsonify(

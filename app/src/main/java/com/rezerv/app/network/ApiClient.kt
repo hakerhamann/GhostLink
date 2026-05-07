@@ -1,5 +1,6 @@
 ﻿package com.rezerv.app.network
 
+import android.util.Log
 import com.rezerv.app.storage.SessionStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -129,10 +130,11 @@ class ApiClient(
 
                 connection = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
-                    connectTimeout = 20_000
-                    readTimeout = 20_000
+                    connectTimeout = 60_000
+                    readTimeout = 60_000
                     doInput = true
                     doOutput = true
+                    setChunkedStreamingMode(64 * 1024)
                     setRequestProperty("Accept", "application/json")
                     setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
                     sessionStore.authToken()?.let { token ->
@@ -142,7 +144,7 @@ class ApiClient(
 
                 DataOutputStream(connection.outputStream).use { output ->
                     output.writeBytes("--$boundary\r\n")
-                    output.writeBytes("Content-Disposition: form-data; name=\"$fieldName\"; filename=\"$fileName\"\r\n")
+                    output.writeBytes("Content-Disposition: form-data; name=\"$fieldName\"; filename=\"${escapeMultipartFilename(fileName)}\"\r\n")
                     output.writeBytes("Content-Type: $contentType\r\n\r\n")
                     val buffer = ByteArray(UPLOAD_CHUNK_BYTES)
                     var sent = 0L
@@ -167,17 +169,23 @@ class ApiClient(
                 }.orEmpty()
 
                 if (status !in 200..299) {
+                    Log.e("VideoUpload", "Upload failed status=$status body=$body path=$safePath")
                     val message = parseErrorMessage(body)
                     throw ApiException(status, message)
                 }
 
                 if (body.isBlank()) JSONObject() else JSONObject(body)
             } catch (exception: IOException) {
+                Log.e("VideoUpload", "Upload exception path=$path file=${file.absolutePath}", exception)
                 throw connectionException(exception)
             } finally {
                 connection?.disconnect()
             }
         }
+
+    private fun escapeMultipartFilename(fileName: String): String {
+        return fileName.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "_").replace("\n", "_")
+    }
 
     private suspend fun uploadMultipartBinary(
         path: String,

@@ -14,6 +14,7 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.View
@@ -71,6 +72,7 @@ internal class ChatRecordingController(
     private var videoCapture: VideoCapture<Recorder>? = null
     private var videoRecording: Recording? = null
     private var videoRecordFile: File? = null
+    private var videoRecordFacing: Int = CameraSelector.LENS_FACING_FRONT
     private var videoCameraFacing: Int = CameraSelector.LENS_FACING_FRONT
     private var isVideoRecording: Boolean = false
     private var pendingVideoSendAfterStop: Boolean = false
@@ -80,7 +82,7 @@ internal class ChatRecordingController(
     private var resumeAfterSwitch: Boolean = false
     private var boundCamera: Camera? = null
     private var isVideoFlashEnabled: Boolean = false
-    private var videoSegments = mutableListOf<File>()
+    private var videoSegments = mutableListOf<VideoSegment>()
     private var isVideoLocked: Boolean = false
     private var isVideoCancelledBySwipe: Boolean = false
     private val recordingUiHandler = Handler(Looper.getMainLooper())
@@ -495,6 +497,7 @@ internal class ChatRecordingController(
                 val outputOptions = FileOutputOptions.Builder(tempFile).build()
                 pendingVideoSendAfterStop = true
                 videoRecordFile = tempFile
+                videoRecordFacing = videoCameraFacing
 
                 videoRecording = capture.output
                     .prepareRecording(activity, outputOptions)
@@ -551,7 +554,7 @@ internal class ChatRecordingController(
             isVideoRecording = false
             if (!send) {
                 runCatching { videoRecordFile?.delete() }
-                videoSegments.forEach { segment -> runCatching { segment.delete() } }
+                videoSegments.forEach { segment -> runCatching { segment.file.delete() } }
                 videoSegments.clear()
                 videoRecordFile = null
             }
@@ -583,7 +586,7 @@ internal class ChatRecordingController(
             pendingCameraSwitchAfterFinalize = false
             val validFile = file?.takeIf { it.exists() && it.length() > 0L }
             if (validFile != null) {
-                videoSegments += validFile
+                videoSegments += VideoSegment(validFile, videoRecordFacing)
             } else {
                 runCatching { file?.delete() }
                 Toast.makeText(activity, "Не удалось сохранить фрагмент", Toast.LENGTH_SHORT).show()
@@ -623,7 +626,7 @@ internal class ChatRecordingController(
             return
         }
 
-        videoSegments += file
+        videoSegments += VideoSegment(file, videoRecordFacing)
         finalizeVideoSegmentsForSend(durationSec.coerceAtMost(MAX_VIDEO_RECORD_DURATION_SEC))
     }
 
@@ -634,32 +637,86 @@ internal class ChatRecordingController(
             Toast.makeText(activity, "Не удалось сохранить видеосообщение", Toast.LENGTH_SHORT).show()
             return
         }
-        if (segments.size == 1) {
-            sendVideo(segments.first(), durationSec)
-            return
-        }
         activity.lifecycleScope.launch {
-            val mergedFile = withContext(Dispatchers.IO) {
-                val output = File(activity.cacheDir, "video_merged_${System.currentTimeMillis()}.mp4")
+            val sendFile = withContext(Dispatchers.IO) {
                 runCatching {
-                    concatMp4Segments(segments, output)
-                    output.takeIf { it.exists() && it.length() > 0L }
+                    val normalized = segments.map { normalizeRoundVideoForSend(it) }
+                    if (normalized.size == 1) {
+                        normalized.first().file.takeIf { it.exists() && it.length() > 0L }
+                    } else {
+                        val output = File(activity.cacheDir, "video_merged_${System.currentTimeMillis()}.mp4")
+                        concatMp4Segments(normalized.map { it.file }, output)
+                        output.takeIf { it.exists() && it.length() > 0L }
+                    }
                 }.onFailure {
-                    output.delete()
+                    Log.e("VideoUpload", "Round video normalize/concat failed", it)
                 }.getOrNull()
             }
-            segments.forEach { segment -> runCatching { segment.delete() } }
-            if (mergedFile == null) {
+            segments.forEach { segment -> runCatching { segment.file.delete() } }
+            if (sendFile == null) {
                 Toast.makeText(activity, "Не удалось собрать видеосообщение", Toast.LENGTH_SHORT).show()
                 return@launch
             }
-            sendVideo(mergedFile, durationSec)
+            sendVideo(sendFile, durationSec)
         }
     }
 
     private fun deleteVideoSegments() {
-        videoSegments.forEach { segment -> runCatching { segment.delete() } }
+        videoSegments.forEach { segment -> runCatching { segment.file.delete() } }
         videoSegments.clear()
+    }
+
+    private fun normalizeRoundVideoForSend(segment: VideoSegment): VideoSegment {
+        val metadataRotation = readSegmentRotation(segment.file)
+        val outputRotation = if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) {
+            normalizeRotation(metadataRotation + 180)
+        } else {
+            metadataRotation
+        }
+        Log.e(
+            "VideoUpload",
+            "normalizeRoundVideoForSend file=${segment.file.absolutePath} lensFacing=${segment.lensFacing} metadataRotation=$metadataRotation outputRotation=$outputRotation"
+        )
+        val output = File(activity.cacheDir, "video_norm_${System.currentTimeMillis()}_${segment.file.name}")
+        remuxVideoWithOrientation(segment.file, output, outputRotation)
+        return VideoSegment(output, segment.lensFacing)
+    }
+
+    private fun remuxVideoWithOrientation(input: File, output: File, orientation: Int) {
+        val extractor = MediaExtractor()
+        val trackIndexMap = mutableMapOf<Int, Int>()
+        try {
+            extractor.setDataSource(input.absolutePath)
+            val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            try {
+                muxer.setOrientationHint(orientation)
+                for (trackIndex in 0 until extractor.trackCount) {
+                    trackIndexMap[trackIndex] = muxer.addTrack(extractor.getTrackFormat(trackIndex))
+                }
+                muxer.start()
+                val buffer = ByteBuffer.allocate(1024 * 1024)
+                val info = MediaCodec.BufferInfo()
+                for (trackIndex in 0 until extractor.trackCount) {
+                    extractor.selectTrack(trackIndex)
+                    while (true) {
+                        val sampleTrack = extractor.sampleTrackIndex
+                        if (sampleTrack != trackIndex) break
+                        buffer.clear()
+                        val sampleSize = extractor.readSampleData(buffer, 0)
+                        if (sampleSize < 0) break
+                        info.set(0, sampleSize, extractor.sampleTime.coerceAtLeast(0L), extractor.sampleFlags)
+                        muxer.writeSampleData(trackIndexMap.getValue(trackIndex), buffer, info)
+                        extractor.advance()
+                    }
+                    extractor.unselectTrack(trackIndex)
+                }
+                muxer.stop()
+            } finally {
+                runCatching { muxer.release() }
+            }
+        } finally {
+            extractor.release()
+        }
     }
 
     private fun concatMp4Segments(segments: List<File>, output: File) {
@@ -854,6 +911,8 @@ internal class ChatRecordingController(
             runCatching { boundCamera?.cameraControl?.enableTorch(false) }
             binding.videoFrontFlashOverlay.isVisible = frontFlashActive
         }
+        binding.videoRecordingContainer.translationZ = if (frontFlashActive) 16f else 0f
+        binding.videoRecordingTools.translationZ = if (frontFlashActive) 18f else 0f
         binding.btnVideoFlash.isSelected = isVideoFlashEnabled
         binding.btnVideoFlash.alpha = if (isVideoFlashEnabled) 1f else 0.65f
         binding.btnVideoFlash.setTextColor(
@@ -862,6 +921,7 @@ internal class ChatRecordingController(
         binding.btnVideoFlash.backgroundTintList = ColorStateList.valueOf(
             if (isVideoFlashEnabled) Color.rgb(255, 236, 120) else Color.argb(210, 18, 24, 21)
         )
+        binding.videoRecordingTools.bringToFront()
         binding.btnVideoFlash.bringToFront()
     }
 
@@ -880,6 +940,7 @@ internal class ChatRecordingController(
         resumeAfterSwitch = false
         runCatching { videoRecordFile?.delete() }
         videoRecordFile = null
+        videoRecordFacing = CameraSelector.LENS_FACING_FRONT
         deleteVideoSegments()
         runCatching { cameraProvider?.unbindAll() }
         boundCamera = null
@@ -905,6 +966,11 @@ internal class ChatRecordingController(
         VOICE,
         VIDEO
     }
+
+    private data class VideoSegment(
+        val file: File,
+        val lensFacing: Int
+    )
 
     private companion object {
         private const val MAX_VOICE_RECORD_DURATION_SEC = 600

@@ -9,6 +9,7 @@ import android.view.View
 import android.view.TextureView
 import android.view.LayoutInflater
 import android.view.ViewGroup
+import android.view.ViewGroup.MarginLayoutParams
 import androidx.core.view.isVisible
 import androidx.interpolator.view.animation.FastOutSlowInInterpolator
 import androidx.recyclerview.widget.DiffUtil
@@ -108,7 +109,7 @@ class MessageAdapter(
                 onDetachVideo = { textureView -> roundVideoPlayer.detachTexture(textureView) },
                 onCancelVideoUpload = onCancelVideoUpload,
                 onCachedVideoReady = { id -> notifyMessageChanged(id) },
-                availableChatWidthPx = stableRoundVideoWidth(),
+                availableChatWidthPx = holder.availableRoundVideoWidthPx(stableRoundVideoWidth()),
                 onIncomingAvatarTap = onIncomingAvatarTap,
                 onSenderNameTap = onSenderNameTap,
                 onIncomingMessageTap = onIncomingMessageTap,
@@ -132,7 +133,7 @@ class MessageAdapter(
                 onDetachVideo = { textureView -> roundVideoPlayer.detachTexture(textureView) },
                 onCancelVideoUpload = onCancelVideoUpload,
                 onCachedVideoReady = { id -> notifyMessageChanged(id) },
-                availableChatWidthPx = stableRoundVideoWidth(),
+                availableChatWidthPx = holder.availableRoundVideoWidthPx(stableRoundVideoWidth()),
                 onOwnMessageTap = onOwnMessageTap,
                 onReplyPreviewTap = onReplyPreviewTap,
                 onMessageImageTap = onMessageImageTap
@@ -600,6 +601,25 @@ class MessageAdapter(
             controller.detachTexture(binding.videoTexture)
         }
 
+        fun availableRoundVideoWidthPx(fallbackWidth: Int): Int {
+            val rowWidth = itemView.width.takeIf { it > 0 } ?: fallbackWidth
+            val safety = (itemView.resources.displayMetrics.density * 4f).toInt().coerceAtLeast(2)
+            val avatarWidth = if (binding.avatarContainer.isVisible) {
+                binding.avatarContainer.width.takeIf { it > 0 }
+                    ?: binding.avatarContainer.measuredWidth.takeIf { it > 0 }
+                    ?: 0
+            } else {
+                0
+            }
+            val avatarMargin = if (binding.avatarContainer.isVisible) {
+                (binding.avatarContainer.layoutParams as? MarginLayoutParams)?.marginEnd ?: 0
+            } else {
+                0
+            }
+            return (rowWidth - itemView.paddingStart - itemView.paddingEnd - avatarWidth - avatarMargin - safety)
+                .coerceAtLeast(1)
+        }
+
         fun roundVideoCandidate(): Pair<ChatMessage, TextureView>? {
             val item = boundItem ?: return null
             if (item.type != MessageType.VIDEO || !binding.videoContainer.isVisible) return null
@@ -798,6 +818,12 @@ class MessageAdapter(
 
         fun releaseRoundVideo(controller: RoundVideoPlayerController) {
             controller.detachTexture(binding.videoTexture)
+        }
+
+        fun availableRoundVideoWidthPx(fallbackWidth: Int): Int {
+            val rowWidth = itemView.width.takeIf { it > 0 } ?: fallbackWidth
+            val safety = (itemView.resources.displayMetrics.density * 4f).toInt().coerceAtLeast(2)
+            return (rowWidth - itemView.paddingStart - itemView.paddingEnd - safety).coerceAtLeast(1)
         }
 
         fun roundVideoCandidate(): Pair<ChatMessage, TextureView>? {
