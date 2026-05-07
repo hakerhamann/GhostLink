@@ -1,0 +1,1 @@
+rg -n 'oppositeSurfaceRotation|applyVideoTargetRotation|switchVideoCameraNow|startVideoSegment|targetRotation|currentBoundLensFacing' app/src/main/java/com/rezerv/app/chat/ChatRecordingController.kt codex/index.jsonl AGENTS.md
