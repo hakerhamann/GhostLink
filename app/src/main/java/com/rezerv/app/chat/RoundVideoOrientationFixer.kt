@@ -22,15 +22,15 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
 internal object RoundVideoOrientationFixer {
-    fun pixelRotateBackSegment180(input: File, output: File) {
-        pixelNormalizeSegment(input, output, CorrectionMode.ROTATE_270)
+    fun pixelNormalizeBackSegment(input: File, output: File) {
+        pixelNormalizeSegment(input, output, CorrectionMode.ROTATE_90)
     }
 
     fun pixelNormalizeFrontSegment(input: File, output: File, metadataRotation: Int) {
         val correctionMode = when (((metadataRotation % 360) + 360) % 360) {
-            90 -> CorrectionMode.ROTATE_90
+            90 -> CorrectionMode.ROTATE_270
             180 -> CorrectionMode.ROTATE_180
-            270 -> CorrectionMode.ROTATE_270
+            270 -> CorrectionMode.ROTATE_90
             else -> CorrectionMode.NONE
         }
         pixelNormalizeSegment(input, output, correctionMode)
@@ -168,7 +168,7 @@ internal object RoundVideoOrientationFixer {
             if (tracks.audioIndex >= 0 && audioMuxTrack >= 0) copyAudio(input, tracks.audioIndex, muxer, audioMuxTrack)
             Log.i(
                 "VideoUpload",
-                "orientation correction inputWidth=$width inputHeight=$height inputRotation=${readRotation(input)} outputWidth=$width outputHeight=$height outputRotation=${readRotation(output)} correctedOutputRotation=${readRotation(output)} correctedTrackRotation=${readRotation(output)} correctionMode=$correctionMode correctedFrameWidth=$width correctedFrameHeight=$height"
+                "orientation correction inputWidth=$width inputHeight=$height inputRotation=${readRotation(input)} outputWidth=$width outputHeight=$height outputRotation=${readRotation(output)} correctedOutputRotation=${readRotation(output)} correctedTrackRotation=${readRotation(output)} correctionMode=$correctionMode correctionOrder=ST_THEN_CORRECTION correctedFrameWidth=$width correctedFrameHeight=$height"
             )
         } finally {
             runCatching { extractor.release() }
