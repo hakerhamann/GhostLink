@@ -828,7 +828,7 @@ internal class ChatRecordingController(
             }
             Log.i(
                 "VideoUpload",
-                "round video segment index=$index lensFacing=${segment.lensFacing} metadataRotation=${input.metadataRotation} correctionMode=ROTATE_270"
+                "round video segment index=$index lensFacing=${segment.lensFacing} metadataRotation=${input.metadataRotation} fixStrategy=output_space_rotate180"
             )
             return segment.copy(file = output, durationUs = readVideoDurationUs(output))
         }
@@ -867,7 +867,7 @@ internal class ChatRecordingController(
         val videoTargetRotation = videoCaptureTargetRotationForLog()
         Log.i(
             "VideoUpload",
-            "$prefix lensFacing=${segment.lensFacing} actualBoundLensFacing=$currentBoundLensFacing cameraId=${boundCameraIdForLog()} file=${segment.file.absolutePath} size=${segment.file.length()} retrieverWidth=${metadata.width} retrieverHeight=${metadata.height} frameWidth=${metadata.frameWidth} frameHeight=${metadata.frameHeight} metadataRotation=${metadata.metadataRotation} trackRotation=${metadata.trackRotation} displayRotation=${rootDisplayRotationForLog()} previewTargetRotation=$previewTargetRotation videoCaptureTargetRotation=$videoTargetRotation sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=false outputRotation=${metadata.metadataRotation} fixStrategy=${if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) "st_matrix_rotate270" else "none"}"
+            "$prefix lensFacing=${segment.lensFacing} actualBoundLensFacing=$currentBoundLensFacing cameraId=${boundCameraIdForLog()} file=${segment.file.absolutePath} size=${segment.file.length()} retrieverWidth=${metadata.width} retrieverHeight=${metadata.height} frameWidth=${metadata.frameWidth} frameHeight=${metadata.frameHeight} metadataRotation=${metadata.metadataRotation} trackRotation=${metadata.trackRotation} displayRotation=${rootDisplayRotationForLog()} previewTargetRotation=$previewTargetRotation videoCaptureTargetRotation=$videoTargetRotation sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=false outputRotation=${metadata.metadataRotation} fixStrategy=${if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) "output_space_rotate180" else "none"}"
         )
     }
 
@@ -900,7 +900,7 @@ internal class ChatRecordingController(
         val metadata = file?.takeIf { it.exists() && it.length() > 0L }?.let { readVideoDiagnostics(it) }
         Log.i(
             "VideoUpload",
-            "$prefix lensFacing=$lensFacing actualBoundLensFacing=$currentBoundLensFacing cameraId=${boundCameraIdForLog()} file=${file?.absolutePath.orEmpty()} size=${file?.length() ?: 0L} retrieverWidth=${metadata?.width ?: 0} retrieverHeight=${metadata?.height ?: 0} frameWidth=${metadata?.frameWidth ?: 0} frameHeight=${metadata?.frameHeight ?: 0} metadataRotation=${metadata?.metadataRotation ?: -1} trackRotation=${metadata?.trackRotation} displayRotation=${rootDisplayRotationForLog()} previewTargetRotation=${previewTargetRotationForLog()} videoCaptureTargetRotation=${videoCaptureTargetRotationForLog()} sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=$normalized outputRotation=${metadata?.metadataRotation ?: -1} fixStrategy=${if (lensFacing == CameraSelector.LENS_FACING_BACK) "st_matrix_rotate270" else "none"}"
+            "$prefix lensFacing=$lensFacing actualBoundLensFacing=$currentBoundLensFacing cameraId=${boundCameraIdForLog()} file=${file?.absolutePath.orEmpty()} size=${file?.length() ?: 0L} retrieverWidth=${metadata?.width ?: 0} retrieverHeight=${metadata?.height ?: 0} frameWidth=${metadata?.frameWidth ?: 0} frameHeight=${metadata?.frameHeight ?: 0} metadataRotation=${metadata?.metadataRotation ?: -1} trackRotation=${metadata?.trackRotation} displayRotation=${rootDisplayRotationForLog()} previewTargetRotation=${previewTargetRotationForLog()} videoCaptureTargetRotation=${videoCaptureTargetRotationForLog()} sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=$normalized outputRotation=${metadata?.metadataRotation ?: -1} fixStrategy=${if (lensFacing == CameraSelector.LENS_FACING_BACK) "output_space_rotate180" else "none"}"
         )
     }
 

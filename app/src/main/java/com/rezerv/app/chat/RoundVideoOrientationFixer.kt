@@ -23,7 +23,6 @@ import java.nio.FloatBuffer
 
 internal object RoundVideoOrientationFixer {
     fun pixelRotateBackSegment180(input: File, output: File) {
-        val correctionMode = CorrectionMode.ROTATE_90
         val tracks = findTracks(input)
         require(tracks.videoIndex >= 0) { "No video track" }
         val videoFormat = tracks.videoFormat ?: error("No video format")
@@ -110,7 +109,7 @@ internal object RoundVideoOrientationFixer {
                             decoder.releaseOutputBuffer(outputIndex, render)
                             if (render) {
                                 val stMatrix = decoderSurface.awaitFrame()
-                                decoderSurface.draw(correctionMode, stMatrix)
+                                decoderSurface.draw(stMatrix)
                                 outputSurface.setPresentationTime(decoderInfo.presentationTimeUs * 1000L)
                                 outputSurface.swapBuffers()
                             }
@@ -154,7 +153,7 @@ internal object RoundVideoOrientationFixer {
             if (tracks.audioIndex >= 0 && audioMuxTrack >= 0) copyAudio(input, tracks.audioIndex, muxer, audioMuxTrack)
             Log.i(
                 "VideoUpload",
-                "orientation correction inputWidth=$width inputHeight=$height inputRotation=${readRotation(input)} outputWidth=$width outputHeight=$height outputRotation=${readRotation(output)} correctionMode=$correctionMode frameWidth=$width frameHeight=$height"
+                "orientation correction inputWidth=$width inputHeight=$height inputRotation=${readRotation(input)} outputWidth=$width outputHeight=$height outputRotation=${readRotation(output)} fixStrategy=output_space_rotate180 frameWidth=$width frameHeight=$height"
             )
         } finally {
             runCatching { extractor.release() }
@@ -283,8 +282,8 @@ internal object RoundVideoOrientationFixer {
             return stMatrix
         }
 
-        fun draw(mode: CorrectionMode, stMatrix: FloatArray) {
-            drawer.draw(mode, stMatrix)
+        fun draw(stMatrix: FloatArray) {
+            drawer.draw(stMatrix)
         }
 
         fun release() {
@@ -300,21 +299,19 @@ internal object RoundVideoOrientationFixer {
         private val textureId: Int
     ) {
         private val vertexBuffer = floatBuffer(
-            -1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f
+            1f, 1f, -1f, 1f, 1f, -1f, -1f, -1f
         )
         private val texBuffer = floatBuffer(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f)
         private val program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
         private val positionLoc = GLES20.glGetAttribLocation(program, "aPosition")
         private val texCoordLoc = GLES20.glGetAttribLocation(program, "aTexCoord")
         private val stMatrixLoc = GLES20.glGetUniformLocation(program, "uSTMatrix")
-        private val correctionMatrixLoc = GLES20.glGetUniformLocation(program, "uCorrectionMatrix")
 
-        fun draw(mode: CorrectionMode, stMatrix: FloatArray) {
+        fun draw(stMatrix: FloatArray) {
             GLES20.glViewport(0, 0, width, height)
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
             GLES20.glUseProgram(program)
             GLES20.glUniformMatrix4fv(stMatrixLoc, 1, false, stMatrix, 0)
-            GLES20.glUniformMatrix4fv(correctionMatrixLoc, 1, false, correctionMatrix(mode), 0)
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
             GLES20.glEnableVertexAttribArray(positionLoc)
@@ -338,38 +335,6 @@ internal object RoundVideoOrientationFixer {
         val videoFormat: MediaFormat?,
         val audioFormat: MediaFormat?
     )
-
-    private enum class CorrectionMode {
-        NONE,
-        ROTATE_90,
-        ROTATE_180,
-        ROTATE_270,
-        MIRROR_X
-    }
-
-    private fun correctionMatrix(mode: CorrectionMode): FloatArray {
-        return when (mode) {
-            CorrectionMode.NONE -> floatArrayOf(
-                1f, 0f, 0f, 0f,
-                0f, 1f, 0f, 0f,
-                0f, 0f, 1f, 0f,
-                0f, 0f, 0f, 1f
-            )
-            CorrectionMode.ROTATE_90 -> textureTransform(0f, 1f, -1f, 0f, 1f, 0f)
-            CorrectionMode.ROTATE_180 -> textureTransform(-1f, 0f, 0f, -1f, 1f, 1f)
-            CorrectionMode.ROTATE_270 -> textureTransform(0f, -1f, 1f, 0f, 0f, 1f)
-            CorrectionMode.MIRROR_X -> textureTransform(-1f, 0f, 0f, 1f, 1f, 0f)
-        }
-    }
-
-    private fun textureTransform(a: Float, b: Float, c: Float, d: Float, tx: Float, ty: Float): FloatArray {
-        return floatArrayOf(
-            a, b, 0f, 0f,
-            c, d, 0f, 0f,
-            0f, 0f, 1f, 0f,
-            tx, ty, 0f, 1f
-        )
-    }
 
     private fun readRotation(file: File): Int {
         val extractor = MediaExtractor()
@@ -447,11 +412,10 @@ internal object RoundVideoOrientationFixer {
         attribute vec4 aPosition;
         attribute vec2 aTexCoord;
         uniform mat4 uSTMatrix;
-        uniform mat4 uCorrectionMatrix;
         varying vec2 vTexCoord;
         void main() {
             gl_Position = aPosition;
-            vTexCoord = (uCorrectionMatrix * uSTMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
+            vTexCoord = (uSTMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
         }
     """
     private const val FRAGMENT_SHADER = """
