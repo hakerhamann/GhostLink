@@ -129,6 +129,44 @@
         app:layout_constraintBottom_toTopOf="@id/composerHost"
         app:layout_constraintEnd_toEndOf="parent" />
 
+    <FrameLayout
+        android:id="@+id/videoRecordingContainer"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:elevation="8dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintDimensionRatio="1:1"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <com.rezerv.app.ui.widget.CircularClipFrameLayout
+            android:id="@+id/videoRecordingPreviewFrame"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_margin="5dp"
+            android:background="@drawable/bg_video_message_circle">
+
+            <androidx.camera.view.PreviewView
+                android:id="@+id/videoRecordingPreview"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+        </com.rezerv.app.ui.widget.CircularClipFrameLayout>
+
+        <View
+            android:id="@+id/videoFrontFlashOverlay"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#CCFFFFFF"
+            android:visibility="gone" />
+
+        <com.rezerv.app.ui.widget.RoundVideoProgressView
+            android:id="@+id/videoRecordingProgress"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+    </FrameLayout>
+
     <LinearLayout
         android:id="@+id/composerHost"
         android:layout_width="0dp"
@@ -273,47 +311,6 @@
                 android:textStyle="bold"
                 android:visibility="gone" />
 
-            <FrameLayout
-                android:id="@+id/videoRecordingContainer"
-                android:layout_width="124dp"
-                android:layout_height="124dp"
-                android:layout_gravity="center_horizontal"
-                android:layout_marginBottom="8dp"
-                android:visibility="gone">
-
-                <com.rezerv.app.ui.widget.CircularClipFrameLayout
-                    android:id="@+id/videoRecordingPreviewFrame"
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent"
-                    android:layout_margin="5dp"
-                    android:background="@drawable/bg_video_message_circle">
-
-                    <androidx.camera.view.PreviewView
-                        android:id="@+id/videoRecordingPreview"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent" />
-                </com.rezerv.app.ui.widget.CircularClipFrameLayout>
-
-                <com.rezerv.app.ui.widget.RoundVideoProgressView
-                    android:id="@+id/videoRecordingProgress"
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent" />
-
-                <TextView
-                    android:id="@+id/btnSwitchVideoCamera"
-                    android:layout_width="34dp"
-                    android:layout_height="34dp"
-                    android:layout_gravity="bottom|end"
-                    android:layout_marginEnd="2dp"
-                    android:layout_marginBottom="2dp"
-                    android:background="@drawable/bg_video_play_button"
-                    android:gravity="center"
-                    android:text="&#x21BB;"
-                    android:textColor="@color/ghost_text_primary"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
-            </FrameLayout>
-
             <LinearLayout
                 android:id="@+id/photoDraftContainer"
                 android:layout_width="match_parent"
@@ -372,9 +369,43 @@
                 android:orientation="horizontal">
 
                 <LinearLayout
-                    android:id="@+id/composerBubble"
-                    android:layout_width="match_parent"
+                    android:id="@+id/videoRecordingTools"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:layout_marginEnd="8dp"
+                    android:gravity="center"
+                    android:orientation="horizontal"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/btnSwitchVideoCamera"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:background="@drawable/bg_video_play_button"
+                        android:gravity="center"
+                        android:text="&#x21BB;"
+                        android:textColor="@color/ghost_text_primary"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/btnVideoFlash"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_video_play_button"
+                        android:gravity="center"
+                        android:text="&#x26A1;"
+                        android:textColor="@color/ghost_text_primary"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/composerBubble"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
                     android:background="@drawable/bg_composer_bubble"
                     android:gravity="center_vertical"
                     android:minHeight="58dp"

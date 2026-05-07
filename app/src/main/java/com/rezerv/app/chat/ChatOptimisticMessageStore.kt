@@ -310,6 +310,7 @@ internal class ChatOptimisticMessageStore(
             first.imageWidths == second.imageWidths &&
             first.imageHeights == second.imageHeights &&
             first.videoUrl == second.videoUrl &&
+            first.videoThumbnailUrl == second.videoThumbnailUrl &&
             first.localVideoPath == second.localVideoPath &&
             first.uploadProgress == second.uploadProgress &&
             first.videoDurationSec == second.videoDurationSec &&

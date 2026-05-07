@@ -280,6 +280,7 @@ class ChatActivity : AppCompatActivity() {
         binding.btnVoice.setOnClickListener { toggleRecordMode() }
         binding.btnVoice.setOnTouchListener { view, event -> handleVoiceButtonTouch(view, event) }
         binding.btnSwitchVideoCamera.setOnClickListener { switchVideoCamera() }
+        binding.btnVideoFlash.setOnClickListener { toggleVideoFlash() }
         binding.btnGroupAvatar.isVisible = false
         binding.btnGroupAvatar.setOnClickListener(null)
         binding.btnCancelReply.setOnClickListener { clearReplyTarget() }
@@ -1288,6 +1289,10 @@ class ChatActivity : AppCompatActivity() {
 
     private fun switchVideoCamera() {
         recordingController.switchVideoCamera()
+    }
+
+    private fun toggleVideoFlash() {
+        recordingController.toggleVideoFlash()
     }
 
     private fun stopAnyActiveRecording(send: Boolean) {

@@ -153,6 +153,7 @@ internal class SessionMessageCacheStore(
                 message.imageHeights.forEach { put(it.coerceAtLeast(0)) }
             })
             .put("videoUrl", message.videoUrl)
+            .put("videoThumbnailUrl", message.videoThumbnailUrl)
             .put("videoDurationSec", message.videoDurationSec)
             .put("replyToMessageId", message.replyToMessageId)
             .put("replyToSenderName", message.replyToSenderName)
@@ -211,6 +212,9 @@ internal class SessionMessageCacheStore(
             imageWidths = imageWidths,
             imageHeights = imageHeights,
             videoUrl = raw.optCleanString("videoUrl"),
+            videoThumbnailUrl = raw.optCleanString("videoThumbnailUrl")
+                ?: raw.optCleanString("thumbnailUrl")
+                ?: raw.optCleanString("previewUrl"),
             videoDurationSec = raw.optInt("videoDurationSec", 0).coerceAtLeast(0),
             replyToMessageId = raw.optString("replyToMessageId").ifBlank { null },
             replyToSenderName = raw.optString("replyToSenderName").ifBlank { null },

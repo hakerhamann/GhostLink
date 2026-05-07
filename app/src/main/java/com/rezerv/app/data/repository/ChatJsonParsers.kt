@@ -52,6 +52,9 @@ internal object ChatJsonParsers {
             imageWidths = imageWidths,
             imageHeights = imageHeights,
             videoUrl = item.optCleanString("videoUrl"),
+            videoThumbnailUrl = item.optCleanString("videoThumbnailUrl")
+                ?: item.optCleanString("thumbnailUrl")
+                ?: item.optCleanString("previewUrl"),
             videoDurationSec = item.optInt("videoDurationSec", 0).coerceAtLeast(0),
             replyToMessageId = item.optJSONObject("replyTo")?.optString("messageId").orEmpty().ifBlank { null },
             replyToSenderName = item.optJSONObject("replyTo")?.optString("senderName").orEmpty().ifBlank { null },

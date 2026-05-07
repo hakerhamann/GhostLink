@@ -284,10 +284,11 @@ internal class RoundVideoPlayerController(
                                 it.start()
                             }
                             shouldStartWhenReady = true
+                            completedMessageId = null
                         } else {
                             shouldStartWhenReady = false
+                            completedMessageId = item.id
                         }
-                        completedMessageId = item.id
                         progressHandler.removeCallbacks(progressUpdater)
                         notifyMessageChanged(item.id)
                     }
@@ -370,8 +371,6 @@ internal class RoundVideoPlayerController(
             return
         }
         completedMessageId = null
-        autoplayMessageId = null
-        expandedMessageId = null
         notifyMessageChanged(activeMessageId)
         progressHandler.removeCallbacks(progressUpdater)
         progressHandler.post(progressUpdater)

@@ -20,6 +20,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
+import androidx.camera.core.Camera
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
@@ -72,6 +73,9 @@ internal class ChatRecordingController(
     private var isVideoRecording: Boolean = false
     private var pendingVideoSendAfterStop: Boolean = false
     private var pendingCameraSwitchAfterFinalize: Boolean = false
+    private var isSwitchingCameraDuringVideo: Boolean = false
+    private var boundCamera: Camera? = null
+    private var isVideoFlashEnabled: Boolean = false
     private var videoSegments = mutableListOf<File>()
     private var isVideoLocked: Boolean = false
     private var isVideoCancelledBySwipe: Boolean = false
@@ -232,6 +236,7 @@ internal class ChatRecordingController(
         if (currentRecordMode != RecordMode.VIDEO) return
         if (isVideoRecording || videoRecording != null) {
             pendingCameraSwitchAfterFinalize = true
+            isSwitchingCameraDuringVideo = true
             pendingVideoSendAfterStop = false
             videoRecording?.stop()
             return
@@ -248,6 +253,12 @@ internal class ChatRecordingController(
                 }
             )
         }
+    }
+
+    fun toggleVideoFlash() {
+        if (currentRecordMode != RecordMode.VIDEO) return
+        isVideoFlashEnabled = !isVideoFlashEnabled
+        applyVideoFlash()
     }
 
     fun stopAnyActiveRecording(send: Boolean) {
@@ -277,7 +288,11 @@ internal class ChatRecordingController(
             binding.videoRecordingProgress.setProgressFraction(
                 elapsedSec.toFloat() / MAX_VIDEO_RECORD_DURATION_SEC.toFloat()
             )
-            binding.btnSwitchVideoCamera.isVisible = isVideoRecording
+            binding.videoRecordingTools.isVisible = isVideoRecording
+            if (isVideoRecording) {
+                binding.tvRecordingStatus.text = if (isVideoLocked) "🔒  отмена ←" else "↑  🔒     отмена ←"
+                applyVideoFlash()
+            }
             binding.btnSend.isEnabled = false
             binding.btnEmoji.isEnabled = false
             binding.btnAttach.isEnabled = false
@@ -287,7 +302,8 @@ internal class ChatRecordingController(
             binding.videoRecordingContainer.isVisible = false
             binding.videoRecordingProgress.isVisible = false
             binding.videoRecordingProgress.setProgressFraction(0f)
-            binding.btnSwitchVideoCamera.isVisible = false
+            binding.videoRecordingTools.isVisible = false
+            binding.videoFrontFlashOverlay.isVisible = false
             binding.btnVoice.text = if (currentRecordMode == RecordMode.VOICE) {
                 "\uD83C\uDFA4"
             } else {
@@ -337,8 +353,9 @@ internal class ChatRecordingController(
         val selector = CameraSelector.Builder().requireLensFacing(nextFacing).build()
         return runCatching {
             provider.unbindAll()
-            provider.bindToLifecycle(activity, selector, preview, capture)
+            boundCamera = provider.bindToLifecycle(activity, selector, preview, capture)
             videoCameraFacing = nextFacing
+            applyVideoFlash()
             true
         }.getOrElse {
             false
@@ -543,6 +560,7 @@ internal class ChatRecordingController(
             if (event.hasError() || file == null || !file.exists() || file.length() <= 0L) {
                 runCatching { file?.delete() }
                 deleteVideoSegments()
+                isSwitchingCameraDuringVideo = false
                 recordingStartedAtMs = 0L
                 updateRecordingUi(recording = false, elapsedSec = 0)
                 Toast.makeText(activity, "Ошибка видеозаписи", Toast.LENGTH_SHORT).show()
@@ -551,17 +569,14 @@ internal class ChatRecordingController(
             videoSegments += file
             if (!switchVideoCameraNow()) {
                 deleteVideoSegments()
+                isSwitchingCameraDuringVideo = false
                 recordingStartedAtMs = 0L
                 updateRecordingUi(recording = false, elapsedSec = 0)
                 Toast.makeText(activity, "Не удалось переключить камеру", Toast.LENGTH_SHORT).show()
                 return
             }
-            if (voiceButtonPressed) {
-                startVideoSegment(resetTimer = false)
-            } else {
-                recordingStartedAtMs = 0L
-                updateRecordingUi(recording = false, elapsedSec = 0)
-            }
+            isSwitchingCameraDuringVideo = false
+            startVideoSegment(resetTimer = false)
             return
         }
 
@@ -788,7 +803,8 @@ internal class ChatRecordingController(
             .build()
         try {
             provider.unbindAll()
-            provider.bindToLifecycle(activity, preferredSelector, preview, capture)
+            boundCamera = provider.bindToLifecycle(activity, preferredSelector, preview, capture)
+            applyVideoFlash()
             return
         } catch (_: Throwable) {
         }
@@ -802,8 +818,20 @@ internal class ChatRecordingController(
             .requireLensFacing(fallbackFacing)
             .build()
         provider.unbindAll()
-        provider.bindToLifecycle(activity, fallbackSelector, preview, capture)
+        boundCamera = provider.bindToLifecycle(activity, fallbackSelector, preview, capture)
         videoCameraFacing = fallbackFacing
+        applyVideoFlash()
+    }
+
+    private fun applyVideoFlash() {
+        if (videoCameraFacing == CameraSelector.LENS_FACING_BACK) {
+            binding.videoFrontFlashOverlay.isVisible = false
+            runCatching { boundCamera?.cameraControl?.enableTorch(isVideoFlashEnabled) }
+        } else {
+            runCatching { boundCamera?.cameraControl?.enableTorch(false) }
+            binding.videoFrontFlashOverlay.isVisible = isVideoFlashEnabled && isVideoRecording
+        }
+        binding.btnVideoFlash.alpha = if (isVideoFlashEnabled) 1f else 0.65f
     }
 
     private fun applyVideoTargetRotation(preview: Preview, capture: VideoCapture<Recorder>) {
@@ -816,10 +844,13 @@ internal class ChatRecordingController(
         videoRecording?.stop()
         videoRecording = null
         pendingCameraSwitchAfterFinalize = false
+        isSwitchingCameraDuringVideo = false
         runCatching { videoRecordFile?.delete() }
         videoRecordFile = null
         deleteVideoSegments()
         runCatching { cameraProvider?.unbindAll() }
+        boundCamera = null
+        isVideoFlashEnabled = false
         videoPreviewUseCase = null
         videoCapture = null
         binding.videoRecordingContainer.isVisible = false

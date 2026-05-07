@@ -9,6 +9,7 @@ import com.rezerv.app.data.model.ChatMessage
 import com.rezerv.app.data.model.MessageSendState
 import com.rezerv.app.data.model.MessageType
 import com.rezerv.app.ui.widget.RoundVideoProgressView
+import com.rezerv.app.util.ImageThumbnailLoader
 
 internal object RoundVideoMessageBinder {
     fun bind(
@@ -55,16 +56,12 @@ internal object RoundVideoMessageBinder {
         container.alpha = 1f
         placeholderView.isVisible = true
         val isUploading = item.type == MessageType.VIDEO && item.sendState == MessageSendState.SENDING
-        progressView.isVisible = !isUploading && (playback.isActive || playback.isDownloading)
-        uploadProgressView.isVisible = isUploading
-        playButton.isVisible = when {
-            isUploading -> true
-            isLoaded && playback.isAutoplay -> false
-            isLoaded && playback.isPlaying && !playback.isExpanded -> false
-            else -> true
-        }
+        val showCenterControl = isUploading || playback.isDownloading || playback.isPreparing || !isLoaded
+        progressView.isVisible = playback.isExpanded && playback.isActive && !playback.isAutoplay
+        uploadProgressView.isVisible = showCenterControl && (isUploading || playback.isDownloading)
+        playButton.isVisible = showCenterControl
         durationView.isVisible = false
-        textureView.alpha = if (playback.isActive) 1f else 0f
+        textureView.alpha = if (playback.isActive && !playback.isDownloading && !playback.isPreparing) 1f else 0f
 
         val durationMs = playback.durationMs.takeIf { it > 0 }
             ?: item.videoDurationSec.coerceAtLeast(0) * 1000
@@ -76,27 +73,38 @@ internal object RoundVideoMessageBinder {
             else -> 0f
         }
         progressView.setProgressFraction(progressFraction)
-        uploadProgressView.setProgressFraction(item.uploadProgress ?: 0f)
+        uploadProgressView.setProgressFraction(
+            when {
+                isUploading -> item.uploadProgress ?: 0f
+                playback.isDownloading -> playback.downloadProgress ?: 0f
+                else -> 0f
+            }
+        )
 
         playButton.text = when {
             isUploading -> "\u00D7"
             playback.isError -> "!"
-            playback.isDownloading || playback.isPreparing -> "\u2026"
+            playback.isDownloading -> "\u00D7"
+            playback.isPreparing -> "\u2026"
             !isLoaded && !isPending -> "\u2B07"
             isPending -> ""
-            playback.isPlaying -> ""
             else -> "\u25B6"
         }
         playButton.alpha = when {
-            playback.isPlaying -> 0f
             isPending -> 0.5f
             else -> 0.9f
         }
 
         val thumbnailSource = localVideoPath
             .takeIf { it.isNotBlank() }
-            ?: cachedVideo?.absolutePath.orEmpty()
-        RoundVideoThumbnailLoader.bind(thumbnailView, thumbnailSource)
+            ?: cachedVideo?.absolutePath
+            ?: item.videoThumbnailUrl?.trim().orEmpty()
+        if (thumbnailSource.startsWith("http://") || thumbnailSource.startsWith("https://")) {
+            thumbnailView.isVisible = true
+            ImageThumbnailLoader.bind(thumbnailView, thumbnailSource)
+        } else {
+            RoundVideoThumbnailLoader.bind(thumbnailView, thumbnailSource)
+        }
         if (playback.isActive) {
             onAttachTexture(textureView)
         } else {
