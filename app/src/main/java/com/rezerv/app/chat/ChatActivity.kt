@@ -1497,11 +1497,13 @@ class ChatActivity : AppCompatActivity() {
         appendOutgoingOverlayMessage(optimisticMessage)
         videoUploadFilesByLocalId[optimisticMessage.id] = file
         clearReplyTarget()
+        Log.i("VideoUpload", "optimistic visible localId=${optimisticMessage.id} file=${file.absolutePath} size=${file.length()}")
 
         val uploadJob = lifecycleScope.launch {
             var cacheReady = false
             var uploadSucceeded = false
             runCatching {
+                val uploadStart = System.currentTimeMillis()
                 val videoUrl = AppContainer.chatRepository.uploadVideoFile(
                     chatId = chatId,
                     file = file,
@@ -1512,16 +1514,21 @@ class ChatActivity : AppCompatActivity() {
                         }
                     }
                 )
+                Log.i("VideoUpload", "upload repository end ms=${System.currentTimeMillis() - uploadStart} url=$videoUrl")
                 updateOverlayUploadProgress(optimisticMessage.id, 1f)
                 cacheReady = RoundVideoCache.putFileForUrl(this@ChatActivity, videoUrl, file) != null
                 uploadSucceeded = true
+                val sendStart = System.currentTimeMillis()
+                Log.i("VideoUpload", "sendVideoMessage start chatId=$chatId url=$videoUrl durationSec=$durationSec")
                 AppContainer.chatRepository.sendVideoMessage(
                     chatId = chatId,
                     videoUrl = videoUrl,
                     durationSec = durationSec,
                     fallbackText = VIDEO_PREVIEW_TEXT,
                     replyToMessageId = sanitizeReplyMessageId(replyTarget)
-                )
+                ).also {
+                    Log.i("VideoUpload", "sendVideoMessage end ms=${System.currentTimeMillis() - sendStart} id=${it.id}")
+                }
             }.onSuccess { confirmedMessage ->
                 markOverlayMessageSent(
                     optimisticMessage.id,

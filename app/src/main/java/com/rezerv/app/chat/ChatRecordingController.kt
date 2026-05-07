@@ -627,6 +627,10 @@ internal class ChatRecordingController(
         }
 
         videoSegments += VideoSegment(file, videoRecordFacing)
+        Log.i(
+            "VideoUpload",
+            "record finalized file=${file.absolutePath} size=${file.length()} durationSec=$durationSec segments=${videoSegments.size}"
+        )
         finalizeVideoSegmentsForSend(durationSec.coerceAtMost(MAX_VIDEO_RECORD_DURATION_SEC))
     }
 
@@ -638,25 +642,58 @@ internal class ChatRecordingController(
             return
         }
         activity.lifecycleScope.launch {
+            val finalizeStart = System.currentTimeMillis()
             val sendFile = withContext(Dispatchers.IO) {
                 runCatching {
-                    val normalized = segments.map { normalizeRoundVideoForSend(it) }
-                    if (normalized.size == 1) {
-                        normalized.first().file.takeIf { it.exists() && it.length() > 0L }
+                    if (segments.size == 1) {
+                        val segment = segments.first()
+                        Log.i(
+                            "VideoUpload",
+                            "normalize skipped reason=single file=${segment.file.absolutePath} size=${segment.file.length()}"
+                        )
+                        segment.file.takeIf { it.exists() && it.length() > 0L }
                     } else {
+                        val switchedCamera = segments.map { it.lensFacing }.distinct().size > 1
+                        if (!switchedCamera) {
+                            Log.w(
+                                "VideoUpload",
+                                "concat skipped reason=no_camera_switch segments=${segments.size} using_first size=${segments.first().file.length()}"
+                            )
+                            return@runCatching segments.first().file.takeIf { it.exists() && it.length() > 0L }
+                        }
+                        val normalizeStart = System.currentTimeMillis()
+                        val normalized = segments.map { normalizeRoundVideoForSend(it) }
                         val output = File(activity.cacheDir, "video_merged_${System.currentTimeMillis()}.mp4")
+                        val concatStart = System.currentTimeMillis()
                         concatMp4Segments(normalized.map { it.file }, output)
+                        Log.i(
+                            "VideoUpload",
+                            "concat end ms=${System.currentTimeMillis() - concatStart} segments=${normalized.size} outputSize=${output.length()}"
+                        )
+                        normalized.forEach { segment ->
+                            if (segment.file !in segments.map { it.file }) runCatching { segment.file.delete() }
+                        }
+                        Log.i(
+                            "VideoUpload",
+                            "normalize+concat end ms=${System.currentTimeMillis() - normalizeStart} inputSize=${segments.sumOf { it.file.length() }} outputSize=${output.length()}"
+                        )
                         output.takeIf { it.exists() && it.length() > 0L }
                     }
                 }.onFailure {
                     Log.e("VideoUpload", "Round video normalize/concat failed", it)
                 }.getOrNull()
             }
-            segments.forEach { segment -> runCatching { segment.file.delete() } }
             if (sendFile == null) {
                 Toast.makeText(activity, "Не удалось собрать видеосообщение", Toast.LENGTH_SHORT).show()
                 return@launch
             }
+            segments.forEach { segment ->
+                if (segment.file.absolutePath != sendFile.absolutePath) runCatching { segment.file.delete() }
+            }
+            Log.i(
+                "VideoUpload",
+                "finalize ready ms=${System.currentTimeMillis() - finalizeStart} sendFile=${sendFile.absolutePath} size=${sendFile.length()} durationSec=$durationSec"
+            )
             sendVideo(sendFile, durationSec)
         }
     }
@@ -678,7 +715,12 @@ internal class ChatRecordingController(
             "normalizeRoundVideoForSend file=${segment.file.absolutePath} lensFacing=${segment.lensFacing} metadataRotation=$metadataRotation outputRotation=$outputRotation"
         )
         val output = File(activity.cacheDir, "video_norm_${System.currentTimeMillis()}_${segment.file.name}")
+        val start = System.currentTimeMillis()
         remuxVideoWithOrientation(segment.file, output, outputRotation)
+        Log.i(
+            "VideoUpload",
+            "normalize end ms=${System.currentTimeMillis() - start} inputSize=${segment.file.length()} outputSize=${output.length()}"
+        )
         return VideoSegment(output, segment.lensFacing)
     }
 
@@ -854,7 +896,8 @@ internal class ChatRecordingController(
                         setSurfaceProvider(binding.videoRecordingPreview.surfaceProvider)
                     }
                     val recorder = Recorder.Builder()
-                        .setQualitySelector(QualitySelector.from(Quality.SD))
+                        .setQualitySelector(QualitySelector.from(Quality.LOWEST))
+                        .setTargetVideoEncodingBitRate(800_000)
                         .build()
                     val capture = VideoCapture.withOutput(recorder)
                     applyVideoTargetRotation(preview, capture)

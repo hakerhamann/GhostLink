@@ -1104,8 +1104,17 @@ def upload_video(chat_id: str):
         return jsonify({"error": "?????? ?????????????? ?? ????????"}), 403
 
     try:
+        file_storage = request.files.get("video")
+        app.logger.info(
+            "VideoUpload upload_video start chat_id=%s content_length=%s files=%s file=%s content_type=%s",
+            parsed_chat_id,
+            request.content_length,
+            list(request.files.keys()),
+            getattr(file_storage, "filename", None),
+            getattr(file_storage, "content_type", None),
+        )
         upload = save_chat_media_upload(
-            file_storage=request.files.get("video"),
+            file_storage=file_storage,
             upload_dir=VIDEO_DIR,
             file_prefix="video",
             chat_id=parsed_chat_id,
@@ -1117,6 +1126,13 @@ def upload_video(chat_id: str):
             default_suffix=".mp4",
         )
     except UploadValidationError as exc:
+        app.logger.warning(
+            "VideoUpload upload_video validation_failed reason=%s content_length=%s files=%s max_bytes=%s",
+            exc.reason,
+            request.content_length,
+            list(request.files.keys()),
+            MAX_VIDEO_FILE_BYTES,
+        )
         if exc.reason == "missing":
             return jsonify({"error": "???? ?????????? ????????? ?? ???????"}), 400
         if exc.reason == "empty":
@@ -1125,6 +1141,12 @@ def upload_video(chat_id: str):
             return jsonify({"error": "????????? ???? ??????? ???????"}), 413
         return jsonify({"error": "????????? ???? ??????? ???????"}), 400
 
+    app.logger.info(
+        "VideoUpload upload_video ok chat_id=%s file=%s size=%s",
+        parsed_chat_id,
+        upload.file_name,
+        upload.file_size,
+    )
     return jsonify(
         {
             "videoUrl": normalize_video_url(upload.file_name),

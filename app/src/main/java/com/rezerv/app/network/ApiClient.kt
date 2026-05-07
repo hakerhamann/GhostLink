@@ -127,14 +127,22 @@ class ApiClient(
                 val url = URL("$baseUrl$safePath")
                 val boundary = "----GhostLinkBoundary${System.currentTimeMillis()}"
                 val fileLength = file.length()
+                val headerBytes = buildString {
+                    append("--$boundary\r\n")
+                    append("Content-Disposition: form-data; name=\"$fieldName\"; filename=\"${escapeMultipartFilename(fileName)}\"\r\n")
+                    append("Content-Type: $contentType\r\n\r\n")
+                }.toByteArray(Charsets.UTF_8)
+                val footerBytes = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
+                val totalLength = headerBytes.size.toLong() + fileLength + footerBytes.size.toLong()
+                val startedAt = System.currentTimeMillis()
 
                 connection = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     connectTimeout = 60_000
-                    readTimeout = 60_000
+                    readTimeout = 120_000
                     doInput = true
                     doOutput = true
-                    setChunkedStreamingMode(64 * 1024)
+                    setFixedLengthStreamingMode(totalLength)
                     setRequestProperty("Accept", "application/json")
                     setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
                     sessionStore.authToken()?.let { token ->
@@ -142,12 +150,13 @@ class ApiClient(
                     }
                 }
 
+                Log.i("VideoUpload", "upload start path=$safePath file=${file.absolutePath} size=$fileLength total=$totalLength")
                 DataOutputStream(connection.outputStream).use { output ->
-                    output.writeBytes("--$boundary\r\n")
-                    output.writeBytes("Content-Disposition: form-data; name=\"$fieldName\"; filename=\"${escapeMultipartFilename(fileName)}\"\r\n")
-                    output.writeBytes("Content-Type: $contentType\r\n\r\n")
+                    Log.i("VideoUpload", "upload firstByte ms=${System.currentTimeMillis() - startedAt}")
+                    output.write(headerBytes)
                     val buffer = ByteArray(UPLOAD_CHUNK_BYTES)
                     var sent = 0L
+                    var lastProgressLogAt = 0L
                     FileInputStream(file).use { input ->
                         while (true) {
                             coroutineContext.ensureActive()
@@ -156,9 +165,14 @@ class ApiClient(
                             output.write(buffer, 0, read)
                             sent += read.toLong()
                             onProgress?.invoke(sent.toFloat() / fileLength.toFloat())
+                            val now = System.currentTimeMillis()
+                            if (now - lastProgressLogAt >= 1_000L || sent == fileLength) {
+                                Log.i("VideoUpload", "upload progress sent=$sent total=$fileLength")
+                                lastProgressLogAt = now
+                            }
                         }
                     }
-                    output.writeBytes("\r\n--$boundary--\r\n")
+                    output.write(footerBytes)
                     output.flush()
                 }
 
@@ -167,6 +181,10 @@ class ApiClient(
                 val body = stream?.use { input ->
                     BufferedReader(InputStreamReader(input)).readText()
                 }.orEmpty()
+                Log.i(
+                    "VideoUpload",
+                    "upload end status=$status ms=${System.currentTimeMillis() - startedAt} body=$body"
+                )
 
                 if (status !in 200..299) {
                     Log.e("VideoUpload", "Upload failed status=$status body=$body path=$safePath")
