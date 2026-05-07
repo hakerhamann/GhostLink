@@ -6,6 +6,7 @@ import android.view.View
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.core.view.isVisible
+import androidx.interpolator.view.animation.FastOutSlowInInterpolator
 import com.rezerv.app.data.model.ChatMessage
 import com.rezerv.app.data.model.MessageSendState
 import com.rezerv.app.data.model.MessageType
@@ -32,6 +33,7 @@ internal object RoundVideoMessageBinder {
         onAttachTexture: (TextureView) -> Unit,
         onDetachTexture: (TextureView) -> Unit,
         onCollapseExpandedByGesture: () -> Boolean,
+        onReplyToMessage: (ChatMessage) -> Unit,
         availableChatWidthPx: Int,
         @Suppress("UNUSED_PARAMETER")
         onCachedVideoReady: (String) -> Unit
@@ -128,44 +130,130 @@ internal object RoundVideoMessageBinder {
                 { onToggleVideo(textureView) }
             }
         )
-        bindExpandedSwipe(container, playback.isExpanded, onCollapseExpandedByGesture)
+        bindExpandedSwipe(container, playback.isExpanded, item, onCollapseExpandedByGesture, onReplyToMessage)
     }
 
     private fun bindExpandedSwipe(
         container: View,
         isExpanded: Boolean,
-        onCollapseExpandedByGesture: () -> Boolean
+        item: ChatMessage,
+        onCollapseExpandedByGesture: () -> Boolean,
+        onReplyToMessage: (ChatMessage) -> Unit
     ) {
         if (!isExpanded) {
             container.setOnTouchListener(null)
             return
         }
-        val threshold = 48f * container.resources.displayMetrics.density
+        val threshold = 96f * container.resources.displayMetrics.density
+        val interpolator = FastOutSlowInInterpolator()
         var downX = 0f
         var downY = 0f
+        var dragging = false
         container.setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    view.animate().cancel()
                     downX = event.rawX
                     downY = event.rawY
-                    view.parent?.requestDisallowInterceptTouchEvent(true)
+                    dragging = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downX
+                    val dy = event.rawY - downY
+                    if (!dragging && (abs(dx) > 8f || abs(dy) > 8f)) {
+                        dragging = true
+                    }
+                    if (dragging) {
+                        if (dx < 0f && abs(dx) > abs(dy)) {
+                            view.parent?.requestDisallowInterceptTouchEvent(false)
+                        } else {
+                            view.parent?.requestDisallowInterceptTouchEvent(true)
+                            view.translationX = dx.coerceAtLeast(0f)
+                            view.translationY = dy
+                            val progress = ((abs(dx) + abs(dy)) / threshold).coerceIn(0f, 1f)
+                            val scale = 1f - 0.04f * progress
+                            view.scaleX = scale
+                            view.scaleY = scale
+                            view.alpha = 1f - 0.08f * progress
+                        }
+                    }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
                     val dx = event.rawX - downX
                     val dy = event.rawY - downY
-                    val collapse = dx > threshold || abs(dy) > threshold
                     view.parent?.requestDisallowInterceptTouchEvent(false)
-                    if (collapse) onCollapseExpandedByGesture() else view.performClick()
+                    when {
+                        dx < -threshold && abs(dx) > abs(dy) -> {
+                            animateReset(view, interpolator) {
+                                onReplyToMessage(item)
+                            }
+                        }
+                        dx > threshold || abs(dy) > threshold -> {
+                            animateCollapse(view, dx, dy, threshold, interpolator) {
+                                onCollapseExpandedByGesture()
+                            }
+                        }
+                        dragging -> animateReset(view, interpolator)
+                        else -> view.performClick()
+                    }
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     view.parent?.requestDisallowInterceptTouchEvent(false)
+                    animateReset(view, interpolator)
                     true
                 }
                 else -> true
             }
         }
+    }
+
+    private fun animateCollapse(
+        view: View,
+        dx: Float,
+        dy: Float,
+        threshold: Float,
+        interpolator: FastOutSlowInInterpolator,
+        endAction: () -> Unit
+    ) {
+        val targetX = if (dx > 0f) threshold * 1.4f else 0f
+        val targetY = if (abs(dy) > threshold) dy.coerceIn(-threshold * 1.4f, threshold * 1.4f) else 0f
+        view.animate()
+            .translationX(targetX)
+            .translationY(targetY)
+            .scaleX(0.92f)
+            .scaleY(0.92f)
+            .alpha(0.85f)
+            .setDuration(120L)
+            .setInterpolator(interpolator)
+            .withEndAction {
+                view.translationX = 0f
+                view.translationY = 0f
+                view.scaleX = 1f
+                view.scaleY = 1f
+                view.alpha = 1f
+                endAction()
+            }
+            .start()
+    }
+
+    private fun animateReset(
+        view: View,
+        interpolator: FastOutSlowInInterpolator,
+        endAction: (() -> Unit)? = null
+    ) {
+        view.animate()
+            .translationX(0f)
+            .translationY(0f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .alpha(1f)
+            .setDuration(170L)
+            .setInterpolator(interpolator)
+            .withEndAction { endAction?.invoke() }
+            .start()
     }
 
     private fun resizeContainer(container: View, expanded: Boolean, availableChatWidthPx: Int) {

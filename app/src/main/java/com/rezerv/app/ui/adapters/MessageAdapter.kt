@@ -34,6 +34,7 @@ class MessageAdapter(
     private val onIncomingMessageTap: (ChatMessage, Float, Float) -> Unit,
     private val onOwnMessageTap: (ChatMessage, Float, Float) -> Unit,
     private val onReplyPreviewTap: (ChatMessage) -> Unit,
+    private val onReplyToMessage: (ChatMessage) -> Unit,
     private val onMessageImageTap: (ChatMessage, Int, String) -> Unit,
     private val onCancelVideoUpload: (String) -> Unit
 ) : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(DiffCallback) {
@@ -115,6 +116,7 @@ class MessageAdapter(
                 onSenderNameTap = onSenderNameTap,
                 onIncomingMessageTap = onIncomingMessageTap,
                 onReplyPreviewTap = onReplyPreviewTap,
+                onReplyToMessage = onReplyToMessage,
                 onMessageImageTap = onMessageImageTap,
                 isHighlighted = highlightedMessageId == item.id
             )
@@ -138,6 +140,7 @@ class MessageAdapter(
                 availableChatWidthPx = holder.availableRoundVideoWidthPx(stableRoundVideoWidth()),
                 onOwnMessageTap = onOwnMessageTap,
                 onReplyPreviewTap = onReplyPreviewTap,
+                onReplyToMessage = onReplyToMessage,
                 onMessageImageTap = onMessageImageTap
             )
 
@@ -456,6 +459,7 @@ class MessageAdapter(
             onSenderNameTap: (ChatMessage) -> Unit,
             onIncomingMessageTap: (ChatMessage, Float, Float) -> Unit,
             onReplyPreviewTap: (ChatMessage) -> Unit,
+            onReplyToMessage: (ChatMessage) -> Unit,
             onMessageImageTap: (ChatMessage, Int, String) -> Unit,
             isHighlighted: Boolean
         ) {
@@ -556,6 +560,7 @@ class MessageAdapter(
                         onAttachTexture = onAttachVideo,
                         onDetachTexture = onDetachVideo,
                         onCollapseExpandedByGesture = onCollapseExpandedByGesture,
+                        onReplyToMessage = onReplyToMessage,
                         availableChatWidthPx = availableChatWidthPx,
                         onCachedVideoReady = onCachedVideoReady
                     )
@@ -694,6 +699,7 @@ class MessageAdapter(
             availableChatWidthPx: Int,
             onOwnMessageTap: (ChatMessage, Float, Float) -> Unit,
             onReplyPreviewTap: (ChatMessage) -> Unit,
+            onReplyToMessage: (ChatMessage) -> Unit,
             onMessageImageTap: (ChatMessage, Int, String) -> Unit
         ) {
             boundItem = item
@@ -774,6 +780,7 @@ class MessageAdapter(
                         onAttachTexture = onAttachVideo,
                         onDetachTexture = onDetachVideo,
                         onCollapseExpandedByGesture = onCollapseExpandedByGesture,
+                        onReplyToMessage = onReplyToMessage,
                         availableChatWidthPx = availableChatWidthPx,
                         onCachedVideoReady = onCachedVideoReady
                     )

@@ -605,7 +605,16 @@ internal class ChatRecordingController(
             pendingCameraSwitchAfterFinalize = false
             val validFile = file?.takeIf { it.exists() && it.length() > 0L }
             if (validFile != null) {
-                videoSegments += VideoSegment(validFile, videoRecordFacing)
+                videoSegments += VideoSegment(
+                    file = validFile,
+                    lensFacing = videoRecordFacing,
+                    startedAtMs = recordingStartedAtMs.takeIf { it > 0L },
+                    durationUs = readVideoDurationUs(validFile)
+                )
+                Log.i(
+                    "VideoUpload",
+                    "segment finalized switch index=${videoSegments.lastIndex} facing=$videoRecordFacing size=${validFile.length()} durationUs=${videoSegments.last().durationUs ?: 0L} path=${validFile.absolutePath}"
+                )
             } else {
                 runCatching { file?.delete() }
                 Toast.makeText(activity, "Не удалось сохранить фрагмент", Toast.LENGTH_SHORT).show()
@@ -645,7 +654,12 @@ internal class ChatRecordingController(
             return
         }
 
-        videoSegments += VideoSegment(file, videoRecordFacing)
+        videoSegments += VideoSegment(
+            file = file,
+            lensFacing = videoRecordFacing,
+            startedAtMs = recordingStartedAtMs.takeIf { it > 0L },
+            durationUs = readVideoDurationUs(file)
+        )
         Log.i(
             "VideoUpload",
             "record finalized file=${file.absolutePath} size=${file.length()} durationSec=$durationSec segments=${videoSegments.size}"
@@ -742,9 +756,9 @@ internal class ChatRecordingController(
             }
             Log.i(
                 "VideoUpload",
-                "round video orientation: lens=BACK sensor=${boundCameraSensorOrientationForLog()} display=${rootDisplayRotationForLog()} inputRotation=${input.metadataRotation} outputRotation=${fixed.metadataRotation} fix=pixel180 input=${segment.file.absolutePath} inputSize=${segment.file.length()} output=${output.absolutePath} outputSize=${output.length()} ms=${System.currentTimeMillis() - start}"
+                "round video orientation: lens=BACK sensor=${boundCameraSensorOrientationForLog()} display=${rootDisplayRotationForLog()} inputRotation=${input.metadataRotation} outputRotation=${fixed.metadataRotation} correctionMode=ROTATE_270 input=${segment.file.absolutePath} inputSize=${segment.file.length()} output=${output.absolutePath} outputSize=${output.length()} ms=${System.currentTimeMillis() - start}"
             )
-            return VideoSegment(output, segment.lensFacing)
+            return segment.copy(file = output, durationUs = readVideoDurationUs(output))
         }
         val outputRotation = readSegmentRotation(segment.file)
         val output = File(activity.cacheDir, "video_norm_${System.currentTimeMillis()}_${segment.file.name}")
@@ -754,7 +768,7 @@ internal class ChatRecordingController(
             "VideoUpload",
             "normalize end ms=${System.currentTimeMillis() - start} inputSize=${segment.file.length()} outputSize=${output.length()}"
         )
-        return VideoSegment(output, segment.lensFacing)
+        return segment.copy(file = output, durationUs = readVideoDurationUs(output))
     }
 
     private fun logFinalizedVideoSegments(segments: List<VideoSegment>) {
@@ -769,7 +783,7 @@ internal class ChatRecordingController(
         val videoTargetRotation = videoCaptureTargetRotationForLog()
         Log.i(
             "VideoUpload",
-            "$prefix lensFacing=${segment.lensFacing} actualBoundLensFacing=$currentBoundLensFacing cameraId=${boundCameraIdForLog()} file=${segment.file.absolutePath} size=${segment.file.length()} retrieverWidth=${metadata.width} retrieverHeight=${metadata.height} frameWidth=${metadata.frameWidth} frameHeight=${metadata.frameHeight} metadataRotation=${metadata.metadataRotation} trackRotation=${metadata.trackRotation} displayRotation=${rootDisplayRotationForLog()} previewTargetRotation=$previewTargetRotation videoCaptureTargetRotation=$videoTargetRotation sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=false outputRotation=${metadata.metadataRotation} fixStrategy=${if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) "pixel180" else "none"}"
+            "$prefix lensFacing=${segment.lensFacing} actualBoundLensFacing=$currentBoundLensFacing cameraId=${boundCameraIdForLog()} file=${segment.file.absolutePath} size=${segment.file.length()} retrieverWidth=${metadata.width} retrieverHeight=${metadata.height} frameWidth=${metadata.frameWidth} frameHeight=${metadata.frameHeight} metadataRotation=${metadata.metadataRotation} trackRotation=${metadata.trackRotation} displayRotation=${rootDisplayRotationForLog()} previewTargetRotation=$previewTargetRotation videoCaptureTargetRotation=$videoTargetRotation sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=false outputRotation=${metadata.metadataRotation} fixStrategy=${if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) "st_matrix_rotate270" else "none"}"
         )
     }
 
@@ -802,7 +816,7 @@ internal class ChatRecordingController(
         val metadata = file?.takeIf { it.exists() && it.length() > 0L }?.let { readVideoDiagnostics(it) }
         Log.i(
             "VideoUpload",
-            "$prefix lensFacing=$lensFacing actualBoundLensFacing=$currentBoundLensFacing cameraId=${boundCameraIdForLog()} file=${file?.absolutePath.orEmpty()} size=${file?.length() ?: 0L} retrieverWidth=${metadata?.width ?: 0} retrieverHeight=${metadata?.height ?: 0} frameWidth=${metadata?.frameWidth ?: 0} frameHeight=${metadata?.frameHeight ?: 0} metadataRotation=${metadata?.metadataRotation ?: -1} trackRotation=${metadata?.trackRotation} displayRotation=${rootDisplayRotationForLog()} previewTargetRotation=${previewTargetRotationForLog()} videoCaptureTargetRotation=${videoCaptureTargetRotationForLog()} sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=$normalized outputRotation=${metadata?.metadataRotation ?: -1} fixStrategy=${if (lensFacing == CameraSelector.LENS_FACING_BACK) "pixel180" else "none"}"
+            "$prefix lensFacing=$lensFacing actualBoundLensFacing=$currentBoundLensFacing cameraId=${boundCameraIdForLog()} file=${file?.absolutePath.orEmpty()} size=${file?.length() ?: 0L} retrieverWidth=${metadata?.width ?: 0} retrieverHeight=${metadata?.height ?: 0} frameWidth=${metadata?.frameWidth ?: 0} frameHeight=${metadata?.frameHeight ?: 0} metadataRotation=${metadata?.metadataRotation ?: -1} trackRotation=${metadata?.trackRotation} displayRotation=${rootDisplayRotationForLog()} previewTargetRotation=${previewTargetRotationForLog()} videoCaptureTargetRotation=${videoCaptureTargetRotationForLog()} sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=$normalized outputRotation=${metadata?.metadataRotation ?: -1} fixStrategy=${if (lensFacing == CameraSelector.LENS_FACING_BACK) "st_matrix_rotate270" else "none"}"
         )
     }
 
@@ -846,30 +860,33 @@ internal class ChatRecordingController(
     private fun concatMp4Segments(segments: List<File>, output: File) {
         require(segments.isNotEmpty())
         val normalizedRotation = commonSegmentRotation(segments) ?: readSegmentRotation(segments.first())
-        val firstExtractor = MediaExtractor()
-        val trackIndexMap = mutableMapOf<Int, Int>()
+        val firstTracks = readTrackFormats(segments.first())
         try {
-            firstExtractor.setDataSource(segments.first().absolutePath)
             val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             try {
                 muxer.setOrientationHint(normalizedRotation)
-                for (trackIndex in 0 until firstExtractor.trackCount) {
-                    val format = firstExtractor.getTrackFormat(trackIndex)
-                    trackIndexMap[trackIndex] = muxer.addTrack(format)
-                }
+                val outputVideoTrack = firstTracks.videoFormat?.let { muxer.addTrack(it) } ?: -1
+                val outputAudioTrack = firstTracks.audioFormat?.let { muxer.addTrack(it) } ?: -1
                 muxer.start()
                 val buffer = ByteBuffer.allocate(1024 * 1024)
                 val info = MediaCodec.BufferInfo()
-                val trackOffsetsUs = LongArray(firstExtractor.trackCount)
-                segments.forEach { segment ->
-                    appendSegmentToMuxer(segment, muxer, trackIndexMap, trackOffsetsUs, buffer, info)
+                val offsets = ConcatOffsets()
+                Log.i("VideoUpload", "concat input count=${segments.size} paths=${segments.joinToString { it.absolutePath }}")
+                segments.forEachIndexed { index, segment ->
+                    val durationUs = readVideoDurationUs(segment)
+                    Log.i("VideoUpload", "concat input index=$index durationUs=$durationUs size=${segment.length()} path=${segment.absolutePath}")
+                    appendSegmentToMuxer(segment, muxer, outputVideoTrack, outputAudioTrack, offsets, buffer, info)
                 }
                 muxer.stop()
+                val outTracks = readTrackFormats(output)
+                Log.i(
+                    "VideoUpload",
+                    "concat output durationUs=${readVideoDurationUs(output)} size=${output.length()} trackOrder=video:${outTracks.videoIndex},audio:${outTracks.audioIndex}"
+                )
             } finally {
                 runCatching { muxer.release() }
             }
         } finally {
-            firstExtractor.release()
         }
     }
 
@@ -940,8 +957,9 @@ internal class ChatRecordingController(
     private fun appendSegmentToMuxer(
         segment: File,
         muxer: MediaMuxer,
-        trackIndexMap: Map<Int, Int>,
-        trackOffsetsUs: LongArray,
+        outputVideoTrack: Int,
+        outputAudioTrack: Int,
+        offsets: ConcatOffsets,
         buffer: ByteBuffer,
         info: MediaCodec.BufferInfo
     ) {
@@ -949,7 +967,15 @@ internal class ChatRecordingController(
         try {
             extractor.setDataSource(segment.absolutePath)
             for (trackIndex in 0 until extractor.trackCount) {
-                val muxerTrack = trackIndexMap[trackIndex] ?: continue
+                val format = extractor.getTrackFormat(trackIndex)
+                val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
+                val isVideo = mime.startsWith("video/")
+                val muxerTrack = when {
+                    isVideo && outputVideoTrack >= 0 -> outputVideoTrack
+                    mime.startsWith("audio/") && outputAudioTrack >= 0 -> outputAudioTrack
+                    else -> continue
+                }
+                val offsetUs = if (isVideo) offsets.videoOffsetUs else offsets.audioOffsetUs
                 extractor.selectTrack(trackIndex)
                 var lastSampleTimeUs = 0L
                 while (true) {
@@ -961,19 +987,58 @@ internal class ChatRecordingController(
                     info.set(
                         0,
                         sampleSize,
-                        extractor.sampleTime.coerceAtLeast(0L) + trackOffsetsUs[trackIndex],
+                        extractor.sampleTime.coerceAtLeast(0L) + offsetUs,
                         extractor.sampleFlags
                     )
                     muxer.writeSampleData(muxerTrack, buffer, info)
                     lastSampleTimeUs = info.presentationTimeUs
                     extractor.advance()
                 }
-                trackOffsetsUs[trackIndex] = lastSampleTimeUs + 1_000L
+                if (isVideo) {
+                    offsets.videoOffsetUs = lastSampleTimeUs + 1_000L
+                } else {
+                    offsets.audioOffsetUs = lastSampleTimeUs + 1_000L
+                }
                 extractor.unselectTrack(trackIndex)
             }
         } finally {
             extractor.release()
         }
+    }
+
+    private fun readTrackFormats(segment: File): SegmentTrackFormats {
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(segment.absolutePath)
+            var videoIndex = -1
+            var audioIndex = -1
+            var videoFormat: MediaFormat? = null
+            var audioFormat: MediaFormat? = null
+            for (trackIndex in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(trackIndex)
+                val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
+                when {
+                    mime.startsWith("video/") && videoIndex < 0 -> {
+                        videoIndex = trackIndex
+                        videoFormat = format
+                    }
+                    mime.startsWith("audio/") && audioIndex < 0 -> {
+                        audioIndex = trackIndex
+                        audioFormat = format
+                    }
+                }
+            }
+            return SegmentTrackFormats(videoIndex, audioIndex, videoFormat, audioFormat)
+        } finally {
+            extractor.release()
+        }
+    }
+
+    private fun readVideoDurationUs(segment: File): Long {
+        return readTrackFormats(segment).videoFormat
+            ?.takeIf { it.containsKey(MediaFormat.KEY_DURATION) }
+            ?.getLong(MediaFormat.KEY_DURATION)
+            ?: 0L
     }
 
     private fun ensureVideoCapture(
@@ -1127,7 +1192,21 @@ internal class ChatRecordingController(
 
     private data class VideoSegment(
         val file: File,
-        val lensFacing: Int
+        val lensFacing: Int,
+        val startedAtMs: Long? = null,
+        val durationUs: Long? = null
+    )
+
+    private data class SegmentTrackFormats(
+        val videoIndex: Int,
+        val audioIndex: Int,
+        val videoFormat: MediaFormat?,
+        val audioFormat: MediaFormat?
+    )
+
+    private data class ConcatOffsets(
+        var videoOffsetUs: Long = 0L,
+        var audioOffsetUs: Long = 0L
     )
 
     private data class VideoDiagnostics(

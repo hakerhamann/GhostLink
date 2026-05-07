@@ -568,6 +568,7 @@ class ChatActivity : AppCompatActivity() {
             onIncomingMessageTap = ::showIncomingMessageActions,
             onOwnMessageTap = ::showOwnMessageActions,
             onReplyPreviewTap = ::onReplyPreviewTap,
+            onReplyToMessage = ::setReplyTarget,
             onMessageImageTap = ::openPhotoMessagePreview,
             onCancelVideoUpload = ::onCancelVideoUpload
         )
