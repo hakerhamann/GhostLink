@@ -46,6 +46,21 @@ class MessageAdapter(
     private val pendingEntranceAnimationIds = linkedSetOf<String>()
     private val entranceInterpolator = FastOutSlowInInterpolator()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var recyclerView: RecyclerView? = null
+    private var autoplayRunnable: Runnable? = null
+    private val roundVideoScrollListener = object : RecyclerView.OnScrollListener() {
+        override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+            if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                scheduleRoundVideoAutoplay()
+            } else {
+                autoplayRunnable?.let(mainHandler::removeCallbacks)
+                autoplayRunnable = null
+                if (!roundVideoPlayer.isExpanded()) {
+                    roundVideoPlayer.stopAutoplay()
+                }
+            }
+        }
+    }
     private val progressHandler = Handler(Looper.getMainLooper())
     private val progressUpdater = object : Runnable {
         override fun run() {
@@ -123,6 +138,35 @@ class MessageAdapter(
             is SystemViewHolder -> holder.bind(item)
         }
         applyEntranceAnimationIfNeeded(holder, item.id)
+    }
+
+    override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
+        super.onAttachedToRecyclerView(recyclerView)
+        this.recyclerView = recyclerView
+        recyclerView.addOnScrollListener(roundVideoScrollListener)
+        scheduleRoundVideoAutoplay()
+    }
+
+    override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) {
+        autoplayRunnable?.let(mainHandler::removeCallbacks)
+        autoplayRunnable = null
+        recyclerView.removeOnScrollListener(roundVideoScrollListener)
+        if (this.recyclerView === recyclerView) this.recyclerView = null
+        super.onDetachedFromRecyclerView(recyclerView)
+    }
+
+    override fun onViewAttachedToWindow(holder: RecyclerView.ViewHolder) {
+        super.onViewAttachedToWindow(holder)
+        scheduleRoundVideoAutoplay()
+    }
+
+    override fun onViewDetachedFromWindow(holder: RecyclerView.ViewHolder) {
+        when (holder) {
+            is IncomingViewHolder -> holder.releaseRoundVideo(roundVideoPlayer)
+            is OutgoingViewHolder -> holder.releaseRoundVideo(roundVideoPlayer)
+        }
+        super.onViewDetachedFromWindow(holder)
+        scheduleRoundVideoAutoplay()
     }
 
     override fun onCurrentListChanged(
@@ -268,8 +312,63 @@ class MessageAdapter(
 
     private fun toggleRoundVideoPlayback(item: ChatMessage, textureView: TextureView) {
         if (item.type != MessageType.VIDEO) return
+        autoplayRunnable?.let(mainHandler::removeCallbacks)
+        autoplayRunnable = null
         stopVoicePlayback()
         roundVideoPlayer.toggle(item, textureView)
+    }
+
+    private fun scheduleRoundVideoAutoplay() {
+        autoplayRunnable?.let(mainHandler::removeCallbacks)
+        if (roundVideoPlayer.isExpanded()) return
+        val rv = recyclerView ?: return
+        if (rv.scrollState != RecyclerView.SCROLL_STATE_IDLE) return
+        val runnable = Runnable { startMostCenteredRoundVideoAutoplay() }
+        autoplayRunnable = runnable
+        mainHandler.postDelayed(runnable, ROUND_VIDEO_AUTOPLAY_DEBOUNCE_MS)
+    }
+
+    private fun startMostCenteredRoundVideoAutoplay() {
+        autoplayRunnable = null
+        val rv = recyclerView ?: return
+        if (roundVideoPlayer.isExpanded() || rv.scrollState != RecyclerView.SCROLL_STATE_IDLE) return
+        val centerY = rv.height / 2
+        var bestItem: ChatMessage? = null
+        var bestTexture: TextureView? = null
+        var bestDistance = Int.MAX_VALUE
+        for (index in 0 until itemCount) {
+            val holder = rv.findViewHolderForAdapterPosition(index) ?: continue
+            val candidate = when (holder) {
+                is IncomingViewHolder -> holder.roundVideoCandidate()
+                is OutgoingViewHolder -> holder.roundVideoCandidate()
+                else -> null
+            } ?: continue
+            val item = candidate.first
+            if (!canAutoplayRoundVideo(rv, item)) continue
+            val viewCenter = (holder.itemView.top + holder.itemView.bottom) / 2
+            val distance = kotlin.math.abs(viewCenter - centerY)
+            if (distance < bestDistance) {
+                bestDistance = distance
+                bestItem = item
+                bestTexture = candidate.second
+            }
+        }
+        val item = bestItem ?: return
+        val texture = bestTexture ?: return
+        if (!roundVideoPlayer.isAutoplaying(item.id)) {
+            roundVideoPlayer.startAutoplay(item, texture)
+        }
+    }
+
+    private fun canAutoplayRoundVideo(recyclerView: RecyclerView, item: ChatMessage): Boolean {
+        if (item.type != MessageType.VIDEO || item.sendState != MessageSendState.SENT) return false
+        val localVideoPath = item.localVideoPath?.trim().orEmpty()
+        if (localVideoPath.isNotBlank() && java.io.File(localVideoPath).let { it.exists() && it.length() > 0L }) {
+            return true
+        }
+        val videoUrl = item.videoUrl?.trim().orEmpty()
+        if (videoUrl.isBlank() || videoUrl.startsWith("pending://")) return false
+        return RoundVideoCache.getCachedFileIfExists(recyclerView.context, videoUrl) != null
     }
 
     private fun stopVoicePlayback(clearStateOnly: Boolean = false) {
@@ -322,6 +421,7 @@ class MessageAdapter(
         private val bubblePaddingTop = binding.messageBubble.paddingTop
         private val bubblePaddingEnd = binding.messageBubble.paddingEnd
         private val bubblePaddingBottom = binding.messageBubble.paddingBottom
+        private var boundItem: ChatMessage? = null
 
         fun bind(
             item: ChatMessage,
@@ -342,6 +442,7 @@ class MessageAdapter(
             onMessageImageTap: (ChatMessage, Int, String) -> Unit,
             isHighlighted: Boolean
         ) {
+            boundItem = item
             binding.tvSender.text = item.senderName
             resetBubbleStyle(isVideo = item.type == MessageType.VIDEO, highlighted = isHighlighted)
 
@@ -485,6 +586,12 @@ class MessageAdapter(
             controller.detachTexture(binding.videoTexture)
         }
 
+        fun roundVideoCandidate(): Pair<ChatMessage, TextureView>? {
+            val item = boundItem ?: return null
+            if (item.type != MessageType.VIDEO || !binding.videoContainer.isVisible) return null
+            return item to binding.videoTexture
+        }
+
         private fun clearRoundVideo(onDetachVideo: (TextureView) -> Unit) {
             RoundVideoMessageBinder.clear(
                 container = binding.videoContainer,
@@ -528,6 +635,7 @@ class MessageAdapter(
         private val bubblePaddingTop = binding.messageBubble.paddingTop
         private val bubblePaddingEnd = binding.messageBubble.paddingEnd
         private val bubblePaddingBottom = binding.messageBubble.paddingBottom
+        private var boundItem: ChatMessage? = null
 
         fun bind(
             item: ChatMessage,
@@ -548,6 +656,7 @@ class MessageAdapter(
             onReplyPreviewTap: (ChatMessage) -> Unit,
             onMessageImageTap: (ChatMessage, Int, String) -> Unit
         ) {
+            boundItem = item
             resetBubbleStyle(isVideo = item.type == MessageType.VIDEO, highlighted = isHighlighted)
             MessageReplyPreviewBinder.bind(
                 container = binding.replyContainer,
@@ -675,6 +784,12 @@ class MessageAdapter(
             controller.detachTexture(binding.videoTexture)
         }
 
+        fun roundVideoCandidate(): Pair<ChatMessage, TextureView>? {
+            val item = boundItem ?: return null
+            if (item.type != MessageType.VIDEO || !binding.videoContainer.isVisible) return null
+            return item to binding.videoTexture
+        }
+
         private fun clearRoundVideo(onDetachVideo: (TextureView) -> Unit) {
             RoundVideoMessageBinder.clear(
                 container = binding.videoContainer,
@@ -747,6 +862,7 @@ class MessageAdapter(
         const val TYPE_OUTGOING = 2
         const val TYPE_SYSTEM = 3
         const val PLAYBACK_TICK_MS = 250L
+        const val ROUND_VIDEO_AUTOPLAY_DEBOUNCE_MS = 250L
     }
 }
 

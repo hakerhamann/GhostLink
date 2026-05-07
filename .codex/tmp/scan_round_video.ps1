@@ -1,0 +1,4 @@
+Select-String -Path app/src/main/java/com/rezerv/app/ui/adapters/RoundVideoPlayerController.kt -Pattern 'transitionToExpandedPlayback|createPlayer|onCompletion|progressUpdater|AUTOPLAY|EXPANDED|nextGeneration|releasePlayerOnly|notifyMessageChanged'
+Select-String -Path app/src/main/java/com/rezerv/app/ui/adapters/RoundVideoMessageBinder.kt -Pattern 'onAutoPlayVideo|resizeContainer|bind\(|TextureView|isActive|RoundVideo'
+Select-String -Path app/src/main/java/com/rezerv/app/ui/adapters/MessageAdapter.kt -Pattern 'RoundVideo|onViewAttached|onViewDetached|onViewRecycled|RecyclerView|SCROLL_STATE|notifyMessageChanged|roundVideo'
+Select-String -Path app/src/main/res/layout/item_message_incoming.xml,app/src/main/res/layout/item_message_outgoing.xml -Pattern 'roundVideo|video|messageBubble|avatar|padding|layout_width|TextureView'

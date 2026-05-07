@@ -24,6 +24,7 @@ internal object RoundVideoMessageBinder {
         item: ChatMessage,
         playback: RoundVideoPlaybackState,
         onToggleVideo: (TextureView) -> Unit,
+        @Suppress("UNUSED_PARAMETER")
         onAutoPlayVideo: (TextureView) -> Unit,
         onCancelUpload: (String) -> Unit,
         onAttachTexture: (TextureView) -> Unit,
@@ -110,9 +111,6 @@ internal object RoundVideoMessageBinder {
         } else {
             onDetachTexture(textureView)
         }
-        if (isLoaded && !playback.isActive && item.sendState == MessageSendState.SENT) {
-            onAutoPlayVideo(textureView)
-        }
         container.setOnClickListener(
             if (isUploading) {
                 { onCancelUpload(item.id) }
@@ -123,12 +121,18 @@ internal object RoundVideoMessageBinder {
     }
 
     private fun resizeContainer(container: View, expanded: Boolean) {
-        val screenWidth = container.resources.displayMetrics.widthPixels
+        val measuredParentWidth = (container.parent as? View)?.width?.takeIf { it > 0 }
+        val rootWidth = container.rootView?.width?.takeIf { it > 0 }
+        val fallbackWidth = container.resources.displayMetrics.widthPixels
+        val availableWidth = (measuredParentWidth ?: rootWidth ?: fallbackWidth).coerceAtLeast(1)
         val target = if (expanded) {
-            screenWidth
+            availableWidth
         } else {
-            (screenWidth * 0.55f).toInt()
+            (availableWidth * 0.55f).toInt()
         }.coerceAtLeast(1)
+        if (container.width <= 0 && expanded) {
+            container.post { resizeContainer(container, expanded = true) }
+        }
         val params = container.layoutParams
         if (params.width != target || params.height != target) {
             params.width = target
