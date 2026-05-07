@@ -5,12 +5,15 @@ import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.media.MediaCodec
 import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.MotionEvent
+import android.view.Surface
 import android.view.View
 import android.view.ViewConfiguration
 import android.widget.Toast
@@ -70,6 +73,8 @@ internal class ChatRecordingController(
     private var pendingVideoSendAfterStop: Boolean = false
     private var pendingCameraSwitchAfterFinalize: Boolean = false
     private var videoSegments = mutableListOf<File>()
+    private var isVideoLocked: Boolean = false
+    private var isVideoCancelledBySwipe: Boolean = false
     private val recordingUiHandler = Handler(Looper.getMainLooper())
 
     init {
@@ -127,6 +132,10 @@ internal class ChatRecordingController(
     fun handleVoiceButtonTouch(view: View, event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                if (isVideoLocked && isVideoRecording) {
+                    stopVideoRecording(send = true)
+                    return true
+                }
                 voiceButtonPressed = true
                 longPressTriggered = false
                 voiceTouchDownX = event.x
@@ -140,6 +149,21 @@ internal class ChatRecordingController(
             }
 
             MotionEvent.ACTION_MOVE -> {
+                if (longPressTriggered && isVideoRecording) {
+                    val dx = event.x - voiceTouchDownX
+                    val dy = event.y - voiceTouchDownY
+                    val slop = ViewConfiguration.get(activity).scaledTouchSlop * 3
+                    if (dx < -slop) {
+                        isVideoCancelledBySwipe = true
+                        voiceButtonPressed = false
+                        stopVideoRecording(send = false)
+                    } else if (dy < -slop) {
+                        isVideoLocked = true
+                        voiceButtonPressed = false
+                        updateRecordingUi(recording = true, elapsedSec = elapsedVideoSec())
+                    }
+                    return true
+                }
                 if (!longPressTriggered) {
                     val slop = ViewConfiguration.get(activity).scaledTouchSlop
                     val movedTooMuch =
@@ -158,7 +182,11 @@ internal class ChatRecordingController(
                 longPressTriggered = false
                 voiceButtonLongPressHandler.removeCallbacks(voiceLongPressRunnable)
                 if (wasLongPress) {
-                    stopAnyActiveRecording(send = true)
+                    if (isVideoLocked) {
+                        updateRecordingUi(recording = true, elapsedSec = elapsedVideoSec())
+                    } else {
+                        stopAnyActiveRecording(send = !isVideoCancelledBySwipe)
+                    }
                 } else if (!isAnyRecordingInProgress()) {
                     view.performClick()
                 }
@@ -232,7 +260,11 @@ internal class ChatRecordingController(
     fun updateRecordingUi(recording: Boolean, elapsedSec: Int) {
         if (recording) {
             val label = if (isVideoRecording) {
-                "Идет запись видео (${elapsedSec}s/${MAX_VIDEO_RECORD_DURATION_SEC}s)"
+                if (isVideoLocked) {
+                    "Видео зафиксировано (${elapsedSec}s/${MAX_VIDEO_RECORD_DURATION_SEC}s)"
+                } else {
+                    "Идет запись видео (${elapsedSec}s/${MAX_VIDEO_RECORD_DURATION_SEC}s)"
+                }
             } else {
                 "Идет запись голосового"
             }
@@ -240,6 +272,7 @@ internal class ChatRecordingController(
             binding.tvRecordingStatus.text = label
             binding.btnVoice.text = "■"
             binding.videoRecordingContainer.isVisible = isVideoRecording
+            resizeVideoRecordingOverlay()
             binding.videoRecordingProgress.isVisible = isVideoRecording
             binding.videoRecordingProgress.setProgressFraction(
                 elapsedSec.toFloat() / MAX_VIDEO_RECORD_DURATION_SEC.toFloat()
@@ -264,8 +297,25 @@ internal class ChatRecordingController(
             binding.btnEmoji.isEnabled = true
             binding.btnAttach.isEnabled = true
             binding.etMessage.isEnabled = true
+            isVideoLocked = false
+            isVideoCancelledBySwipe = false
         }
         updateComposerActionState()
+    }
+
+    private fun elapsedVideoSec(): Int {
+        return ((System.currentTimeMillis() - recordingStartedAtMs) / 1000L).toInt().coerceAtLeast(0)
+    }
+
+    private fun resizeVideoRecordingOverlay() {
+        val width = binding.root.width.takeIf { it > 0 } ?: activity.resources.displayMetrics.widthPixels
+        val target = (width - 32 * activity.resources.displayMetrics.density).toInt().coerceAtLeast(1)
+        val params = binding.videoRecordingContainer.layoutParams
+        if (params.width != target || params.height != target) {
+            params.width = target
+            params.height = target
+            binding.videoRecordingContainer.layoutParams = params
+        }
     }
 
     fun release() {
@@ -408,6 +458,8 @@ internal class ChatRecordingController(
         if (isAnyRecordingInProgress() || !voiceButtonPressed) return
         hideEmojiPanel()
         binding.videoRecordingContainer.isVisible = true
+        isVideoLocked = false
+        isVideoCancelledBySwipe = false
         videoSegments.clear()
         startVideoSegment(resetTimer = true)
     }
@@ -577,12 +629,14 @@ internal class ChatRecordingController(
 
     private fun concatMp4Segments(segments: List<File>, output: File) {
         require(segments.isNotEmpty())
+        val normalizedRotation = commonSegmentRotation(segments) ?: readSegmentRotation(segments.first())
         val firstExtractor = MediaExtractor()
         val trackIndexMap = mutableMapOf<Int, Int>()
         try {
             firstExtractor.setDataSource(segments.first().absolutePath)
             val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             try {
+                muxer.setOrientationHint(normalizedRotation)
                 for (trackIndex in 0 until firstExtractor.trackCount) {
                     val format = firstExtractor.getTrackFormat(trackIndex)
                     trackIndexMap[trackIndex] = muxer.addTrack(format)
@@ -600,6 +654,47 @@ internal class ChatRecordingController(
             }
         } finally {
             firstExtractor.release()
+        }
+    }
+
+    private fun commonSegmentRotation(segments: List<File>): Int? {
+        val rotations = segments.map { readSegmentRotation(it) }.distinct()
+        return rotations.singleOrNull()
+    }
+
+    private fun readSegmentRotation(segment: File): Int {
+        val metadataRotation = runCatching {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(segment.absolutePath)
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull()
+            } finally {
+                retriever.release()
+            }
+        }.getOrNull()
+        if (metadataRotation != null) return normalizeRotation(metadataRotation)
+
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(segment.absolutePath)
+            for (trackIndex in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(trackIndex)
+                val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
+                if (mime.startsWith("video/") && format.containsKey(MediaFormat.KEY_ROTATION)) {
+                    return normalizeRotation(format.getInteger(MediaFormat.KEY_ROTATION))
+                }
+            }
+            0
+        } finally {
+            extractor.release()
+        }
+    }
+
+    private fun normalizeRotation(rotation: Int): Int {
+        val normalized = ((rotation % 360) + 360) % 360
+        return when (normalized) {
+            90, 180, 270 -> normalized
+            else -> 0
         }
     }
 
@@ -670,6 +765,7 @@ internal class ChatRecordingController(
                         .setQualitySelector(QualitySelector.from(Quality.SD))
                         .build()
                     val capture = VideoCapture.withOutput(recorder)
+                    applyVideoTargetRotation(preview, capture)
                     bindVideoUseCases(provider, preview, capture)
                     cameraProvider = provider
                     videoPreviewUseCase = preview
@@ -686,6 +782,7 @@ internal class ChatRecordingController(
         preview: Preview,
         capture: VideoCapture<Recorder>
     ) {
+        applyVideoTargetRotation(preview, capture)
         val preferredSelector = CameraSelector.Builder()
             .requireLensFacing(videoCameraFacing)
             .build()
@@ -707,6 +804,12 @@ internal class ChatRecordingController(
         provider.unbindAll()
         provider.bindToLifecycle(activity, fallbackSelector, preview, capture)
         videoCameraFacing = fallbackFacing
+    }
+
+    private fun applyVideoTargetRotation(preview: Preview, capture: VideoCapture<Recorder>) {
+        val rotation = binding.root.display?.rotation ?: Surface.ROTATION_0
+        preview.targetRotation = rotation
+        capture.targetRotation = rotation
     }
 
     private fun releaseVideoCapture() {

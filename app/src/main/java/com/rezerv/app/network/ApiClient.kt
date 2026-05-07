@@ -2,6 +2,7 @@
 
 import com.rezerv.app.storage.SessionStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -10,6 +11,7 @@ import java.io.IOException
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlin.coroutines.coroutineContext
 
 class ApiClient(
     private val sessionStore: SessionStore
@@ -99,13 +101,14 @@ class ApiClient(
         onProgress: ((Float) -> Unit)? = null
     ): JSONObject =
         withContext(Dispatchers.IO) {
+            var connection: HttpURLConnection? = null
             try {
                 val baseUrl = sessionStore.getServerUrl().removeSuffix("/")
                 val safePath = if (path.startsWith("/")) path else "/$path"
                 val url = URL("$baseUrl$safePath")
                 val boundary = "----GhostLinkBoundary${System.currentTimeMillis()}"
 
-                val connection = (url.openConnection() as HttpURLConnection).apply {
+                connection = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     connectTimeout = 20_000
                     readTimeout = 20_000
@@ -124,6 +127,7 @@ class ApiClient(
                     output.writeBytes("Content-Type: $contentType\r\n\r\n")
                     var offset = 0
                     while (offset < payloadBytes.size) {
+                        coroutineContext.ensureActive()
                         val count = minOf(UPLOAD_CHUNK_BYTES, payloadBytes.size - offset)
                         output.write(payloadBytes, offset, count)
                         offset += count
@@ -147,6 +151,8 @@ class ApiClient(
                 if (body.isBlank()) JSONObject() else JSONObject(body)
             } catch (exception: IOException) {
                 throw connectionException(exception)
+            } finally {
+                connection?.disconnect()
             }
         }
 

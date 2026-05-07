@@ -31,6 +31,8 @@ internal class RoundVideoPlayerController(
     private var errorMessageId: String? = null
     private var downloadProgress: Float? = null
     private var completedMessageId: String? = null
+    private var autoplayMessageId: String? = null
+    private var expandedMessageId: String? = null
     private var overlayUntilMs: Long = 0L
     private var boundTextureView: TextureView? = null
     private var surface: Surface? = null
@@ -71,6 +73,8 @@ internal class RoundVideoPlayerController(
             isDownloading = downloadingMessageId == item.id,
             isPlaying = isActive && runCatching { player?.isPlaying == true }.getOrDefault(false),
             isCompleted = completedMessageId == item.id,
+            isAutoplay = autoplayMessageId == item.id,
+            isExpanded = expandedMessageId == item.id,
             isError = errorMessageId == item.id,
             showTransientOverlay = overlayUntilMs > System.currentTimeMillis() && activeMessageId == item.id,
             downloadProgress = if (downloadingMessageId == item.id) downloadProgress else null,
@@ -96,6 +100,19 @@ internal class RoundVideoPlayerController(
         val player = mediaPlayer
         if (activeMessageId == item.id && player != null) {
             attachTextureView(textureView)
+            if (autoplayMessageId == item.id) {
+                autoplayMessageId = null
+                expandedMessageId = item.id
+                runCatching {
+                    player.isLooping = false
+                    player.setVolume(1f, 1f)
+                    player.seekTo(0)
+                }
+                shouldStartWhenReady = true
+                startIfReady()
+                notifyMessageChanged(item.id)
+                return
+            }
             if (preparingMessageId == item.id) {
                 release()
                 return
@@ -130,6 +147,8 @@ internal class RoundVideoPlayerController(
         errorMessageId = null
         completedMessageId = null
         overlayUntilMs = System.currentTimeMillis() + TAP_OVERLAY_MS
+        autoplayMessageId = null
+        expandedMessageId = item.id
         shouldStartWhenReady = true
         prepared = false
         videoWidth = 0
@@ -138,6 +157,29 @@ internal class RoundVideoPlayerController(
         notifyMessageChanged(item.id)
         attachTextureView(textureView)
         prepareSourceAndCreatePlayer(item, videoUrl, localVideoPath)
+    }
+
+    fun autoplay(item: ChatMessage, textureView: TextureView) {
+        if (item.type != MessageType.VIDEO || activeMessageId == item.id) return
+        val source = localPlayablePath(textureView.context, item) ?: return
+        val previousActive = activeMessageId
+        release(clearNotifications = true)
+        activeMessageId = item.id
+        preparingMessageId = item.id
+        downloadingMessageId = null
+        errorMessageId = null
+        completedMessageId = null
+        autoplayMessageId = item.id
+        expandedMessageId = null
+        overlayUntilMs = 0L
+        shouldStartWhenReady = true
+        prepared = false
+        videoWidth = 0
+        videoHeight = 0
+        notifyMessageChanged(previousActive)
+        notifyMessageChanged(item.id)
+        attachTextureView(textureView)
+        createPlayer(item, source, autoplay = true)
     }
 
     fun detachTexture(textureView: TextureView) {
@@ -162,7 +204,7 @@ internal class RoundVideoPlayerController(
     private fun prepareSourceAndCreatePlayer(item: ChatMessage, videoUrl: String, localVideoPath: String) {
         val localFile = localVideoPath.takeIf { it.isNotBlank() }?.let(::File)?.takeIf { it.exists() && it.length() > 0L }
         if (localFile != null) {
-            createPlayer(item, localFile.absolutePath)
+            createPlayer(item, localFile.absolutePath, autoplay = false)
             return
         }
 
@@ -190,11 +232,19 @@ internal class RoundVideoPlayerController(
             }
             preparingMessageId = item.id
             notifyMessageChanged(item.id)
-            createPlayer(item, file.absolutePath)
+            createPlayer(item, file.absolutePath, autoplay = false)
         }
     }
 
-    private fun createPlayer(item: ChatMessage, dataSource: String) {
+    private fun localPlayablePath(context: android.content.Context, item: ChatMessage): String? {
+        val localVideoPath = item.localVideoPath?.trim().orEmpty()
+        val localFile = localVideoPath.takeIf { it.isNotBlank() }?.let(::File)?.takeIf { it.exists() && it.length() > 0L }
+        if (localFile != null) return localFile.absolutePath
+        val videoUrl = item.videoUrl?.trim().orEmpty()
+        return RoundVideoCache.getCachedFileIfExists(context, videoUrl)?.absolutePath
+    }
+
+    private fun createPlayer(item: ChatMessage, dataSource: String, autoplay: Boolean) {
         runCatching {
             MediaPlayer().apply {
                 setAudioAttributes(
@@ -204,6 +254,8 @@ internal class RoundVideoPlayerController(
                         .build()
                 )
                 setDataSource(dataSource)
+                isLooping = autoplay
+                if (autoplay) setVolume(0f, 0f) else setVolume(1f, 1f)
                 surface?.let { currentSurface ->
                     runCatching { setSurface(currentSurface) }.getOrThrow()
                 }
@@ -222,10 +274,21 @@ internal class RoundVideoPlayerController(
                 }
                 setOnCompletionListener {
                     if (activeMessageId == item.id) {
+                        if (expandedMessageId == item.id) {
+                            expandedMessageId = null
+                            autoplayMessageId = item.id
+                            runCatching {
+                                it.isLooping = true
+                                it.setVolume(0f, 0f)
+                                it.seekTo(0)
+                                it.start()
+                            }
+                            shouldStartWhenReady = true
+                        } else {
+                            shouldStartWhenReady = false
+                        }
                         completedMessageId = item.id
-                        shouldStartWhenReady = false
                         progressHandler.removeCallbacks(progressUpdater)
-                        runCatching { it.seekTo(0) }
                         notifyMessageChanged(item.id)
                     }
                 }
@@ -307,6 +370,8 @@ internal class RoundVideoPlayerController(
             return
         }
         completedMessageId = null
+        autoplayMessageId = null
+        expandedMessageId = null
         notifyMessageChanged(activeMessageId)
         progressHandler.removeCallbacks(progressUpdater)
         progressHandler.post(progressUpdater)
@@ -394,6 +459,8 @@ internal data class RoundVideoPlaybackState(
     val isDownloading: Boolean,
     val isPlaying: Boolean,
     val isCompleted: Boolean,
+    val isAutoplay: Boolean,
+    val isExpanded: Boolean,
     val isError: Boolean,
     val showTransientOverlay: Boolean,
     val downloadProgress: Float?,

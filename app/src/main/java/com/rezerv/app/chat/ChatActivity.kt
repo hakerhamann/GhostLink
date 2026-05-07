@@ -57,6 +57,8 @@ import com.rezerv.app.util.ImageThumbnailLoader
 import com.rezerv.app.util.PhotoMessageProcessor
 import com.rezerv.app.storage.SessionStore
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
@@ -69,6 +71,8 @@ class ChatActivity : AppCompatActivity() {
     private var currentUser: UserProfile? = null
     private var adapter: MessageAdapter? = null
     private lateinit var emojiKeyboardController: ChatEmojiKeyboardController
+    private val videoUploadJobsByLocalId = mutableMapOf<String, Job>()
+    private val videoUploadFilesByLocalId = mutableMapOf<String, File>()
     private lateinit var viewportController: ChatViewportController
     private lateinit var replyController: ChatReplyController
     private lateinit var optimisticMessageStore: ChatOptimisticMessageStore
@@ -559,7 +563,8 @@ class ChatActivity : AppCompatActivity() {
             onIncomingMessageTap = ::showIncomingMessageActions,
             onOwnMessageTap = ::showOwnMessageActions,
             onReplyPreviewTap = ::onReplyPreviewTap,
-            onMessageImageTap = ::openPhotoMessagePreview
+            onMessageImageTap = ::openPhotoMessagePreview,
+            onCancelVideoUpload = ::onCancelVideoUpload
         )
         binding.recyclerMessages.adapter = adapter
         setupSwipeToReplyIfNeeded()
@@ -688,6 +693,14 @@ class ChatActivity : AppCompatActivity() {
         if (optimisticMessageStore.removeOverlayMessage(rawId)) {
             submitVisibleMessages(mergeMessagesForDisplay())
         }
+    }
+
+    private fun onCancelVideoUpload(localId: String) {
+        videoUploadJobsByLocalId.remove(localId)?.cancel()
+        videoUploadFilesByLocalId.remove(localId)?.let { file ->
+            runCatching { file.delete() }
+        }
+        removeOverlayMessage(localId)
     }
 
     private fun resolveServerMessageId(rawId: String?): String? {
@@ -1470,9 +1483,10 @@ class ChatActivity : AppCompatActivity() {
             replyTarget = replyTarget
         ).copy(localVideoPath = file.absolutePath)
         appendOutgoingOverlayMessage(optimisticMessage)
+        videoUploadFilesByLocalId[optimisticMessage.id] = file
         clearReplyTarget()
 
-        lifecycleScope.launch {
+        val uploadJob = lifecycleScope.launch {
             var cacheReady = false
             var uploadSucceeded = false
             runCatching {
@@ -1503,6 +1517,10 @@ class ChatActivity : AppCompatActivity() {
                 )
                 MessageNotificationHelper.cancelChatNotification(this@ChatActivity, chatId)
             }.onFailure { throwable ->
+                if (throwable is CancellationException) {
+                    removeOverlayMessage(optimisticMessage.id)
+                    return@onFailure
+                }
                 markOverlayMessageFailed(optimisticMessage.id)
                 Toast.makeText(
                     this@ChatActivity,
@@ -1511,10 +1529,13 @@ class ChatActivity : AppCompatActivity() {
                 ).show()
             }
 
+            videoUploadJobsByLocalId.remove(optimisticMessage.id)
+            videoUploadFilesByLocalId.remove(optimisticMessage.id)
             if (cacheReady || !uploadSucceeded || !file.exists()) {
                 runCatching { file.delete() }
             }
         }
+        videoUploadJobsByLocalId[optimisticMessage.id] = uploadJob
     }
 
     private fun uploadAndSendPhoto(uri: Uri) {

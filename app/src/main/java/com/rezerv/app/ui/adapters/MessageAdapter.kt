@@ -32,7 +32,8 @@ class MessageAdapter(
     private val onIncomingMessageTap: (ChatMessage, Float, Float) -> Unit,
     private val onOwnMessageTap: (ChatMessage, Float, Float) -> Unit,
     private val onReplyPreviewTap: (ChatMessage) -> Unit,
-    private val onMessageImageTap: (ChatMessage, Int, String) -> Unit
+    private val onMessageImageTap: (ChatMessage, Int, String) -> Unit,
+    private val onCancelVideoUpload: (String) -> Unit
 ) : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(DiffCallback) {
 
     private var recipientsCount: Int = initialRecipientsCount.coerceAtLeast(1)
@@ -86,8 +87,10 @@ class MessageAdapter(
                 isGroupChat = isGroupChat,
                 onPlayVoice = { toggleVoicePlayback(item) },
                 onToggleVideo = { textureView -> toggleRoundVideoPlayback(item, textureView) },
+                onAutoPlayVideo = { textureView -> roundVideoPlayer.autoplay(item, textureView) },
                 onAttachVideo = { textureView -> roundVideoPlayer.attachTexture(item, textureView) },
                 onDetachVideo = { textureView -> roundVideoPlayer.detachTexture(textureView) },
+                onCancelVideoUpload = onCancelVideoUpload,
                 onCachedVideoReady = { id -> notifyMessageChanged(id) },
                 onIncomingAvatarTap = onIncomingAvatarTap,
                 onSenderNameTap = onSenderNameTap,
@@ -107,8 +110,10 @@ class MessageAdapter(
                 videoPlayback = videoPlaybackState,
                 onPlayVoice = { toggleVoicePlayback(item) },
                 onToggleVideo = { textureView -> toggleRoundVideoPlayback(item, textureView) },
+                onAutoPlayVideo = { textureView -> roundVideoPlayer.autoplay(item, textureView) },
                 onAttachVideo = { textureView -> roundVideoPlayer.attachTexture(item, textureView) },
                 onDetachVideo = { textureView -> roundVideoPlayer.detachTexture(textureView) },
+                onCancelVideoUpload = onCancelVideoUpload,
                 onCachedVideoReady = { id -> notifyMessageChanged(id) },
                 onOwnMessageTap = onOwnMessageTap,
                 onReplyPreviewTap = onReplyPreviewTap,
@@ -325,8 +330,10 @@ class MessageAdapter(
             isGroupChat: Boolean,
             onPlayVoice: () -> Unit,
             onToggleVideo: (TextureView) -> Unit,
+            onAutoPlayVideo: (TextureView) -> Unit,
             onAttachVideo: (TextureView) -> Unit,
             onDetachVideo: (TextureView) -> Unit,
+            onCancelVideoUpload: (String) -> Unit,
             onCachedVideoReady: (String) -> Unit,
             onIncomingAvatarTap: (ChatMessage) -> Unit,
             onSenderNameTap: (ChatMessage) -> Unit,
@@ -426,6 +433,8 @@ class MessageAdapter(
                         item = item,
                         playback = videoPlayback,
                         onToggleVideo = onToggleVideo,
+                        onAutoPlayVideo = onAutoPlayVideo,
+                        onCancelUpload = onCancelVideoUpload,
                         onAttachTexture = onAttachVideo,
                         onDetachTexture = onDetachVideo,
                         onCachedVideoReady = onCachedVideoReady
@@ -530,8 +539,10 @@ class MessageAdapter(
             videoPlayback: RoundVideoPlaybackState,
             onPlayVoice: () -> Unit,
             onToggleVideo: (TextureView) -> Unit,
+            onAutoPlayVideo: (TextureView) -> Unit,
             onAttachVideo: (TextureView) -> Unit,
             onDetachVideo: (TextureView) -> Unit,
+            onCancelVideoUpload: (String) -> Unit,
             onCachedVideoReady: (String) -> Unit,
             onOwnMessageTap: (ChatMessage, Float, Float) -> Unit,
             onReplyPreviewTap: (ChatMessage) -> Unit,
@@ -609,6 +620,8 @@ class MessageAdapter(
                         item = item,
                         playback = videoPlayback,
                         onToggleVideo = onToggleVideo,
+                        onAutoPlayVideo = onAutoPlayVideo,
+                        onCancelUpload = onCancelVideoUpload,
                         onAttachTexture = onAttachVideo,
                         onDetachTexture = onDetachVideo,
                         onCachedVideoReady = onCachedVideoReady
