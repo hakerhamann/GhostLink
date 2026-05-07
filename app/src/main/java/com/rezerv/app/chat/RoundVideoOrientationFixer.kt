@@ -299,7 +299,7 @@ internal object RoundVideoOrientationFixer {
         private val textureId: Int
     ) {
         private val vertexBuffer = floatBuffer(
-            1f, 1f, -1f, 1f, 1f, -1f, -1f, -1f
+            -1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f
         )
         private val texBuffer = floatBuffer(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f)
         private val program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
