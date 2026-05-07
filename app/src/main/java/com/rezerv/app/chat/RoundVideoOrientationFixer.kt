@@ -22,14 +22,15 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
 internal object RoundVideoOrientationFixer {
-    fun pixelRotateBackSegment180(input: File, output: File) {
+    fun normalizeSegmentToRotation0(input: File, output: File, extraRotationDegrees: Int) {
         val tracks = findTracks(input)
         require(tracks.videoIndex >= 0) { "No video track" }
         val videoFormat = tracks.videoFormat ?: error("No video format")
         val width = videoFormat.getInteger(MediaFormat.KEY_WIDTH)
         val height = videoFormat.getInteger(MediaFormat.KEY_HEIGHT)
-        val inputRotation = readRotation(input)
-        val (outWidth, outHeight) = if (inputRotation == 90 || inputRotation == 270) {
+        val inputRotation = normalizeRotation(readRotation(input))
+        val totalRotation = normalizeRotation(inputRotation + extraRotationDegrees)
+        val (outWidth, outHeight) = if (totalRotation == 90 || totalRotation == 270) {
             height to width
         } else {
             width to height
@@ -68,7 +69,7 @@ internal object RoundVideoOrientationFixer {
             outputSurface = CodecInputSurface(inputSurface).apply { makeCurrent() }
             encoder.start()
 
-            decoderSurface = DecoderOutputSurface(outWidth, outHeight, inputRotation)
+            decoderSurface = DecoderOutputSurface(outWidth, outHeight, totalRotation)
             decoder = MediaCodec.createDecoderByType(mime).apply {
                 configure(videoFormat, decoderSurface.surface, null, 0)
                 start()
@@ -160,7 +161,7 @@ internal object RoundVideoOrientationFixer {
             if (tracks.audioIndex >= 0 && audioMuxTrack >= 0) copyAudio(input, tracks.audioIndex, muxer, audioMuxTrack)
             Log.i(
                 "VideoUpload",
-                "orientation correction inputWidth=$width inputHeight=$height inputRotation=$inputRotation outputWidth=$outWidth outputHeight=$outHeight outputRotation=0 fixStrategy=texture_normalize frameWidth=$outWidth frameHeight=$outHeight"
+                "normalize segment inputWidth=$width inputHeight=$height inputRotation=$inputRotation extraRotationDegrees=$extraRotationDegrees totalRotation=$totalRotation outWidth=$outWidth outHeight=$outHeight outputRotation=0 fixStrategy=texture_normalize frameWidth=$outWidth frameHeight=$outHeight"
             )
         } finally {
             runCatching { extractor.release() }
@@ -259,13 +260,13 @@ internal object RoundVideoOrientationFixer {
         }
     }
 
-    private class DecoderOutputSurface(width: Int, height: Int, inputRotation: Int) : SurfaceTexture.OnFrameAvailableListener {
+    private class DecoderOutputSurface(width: Int, height: Int, totalRotation: Int) : SurfaceTexture.OnFrameAvailableListener {
         private val frameSyncObject = Object()
         private var frameAvailable = false
         private val textureId = createTexture()
         private val surfaceTexture = SurfaceTexture(textureId)
         val surface = Surface(surfaceTexture)
-        private val drawer = TextureDrawer(width, height, textureId, inputRotation)
+        private val drawer = TextureDrawer(width, height, textureId, totalRotation)
 
         init {
             surfaceTexture.setOnFrameAvailableListener(this)
@@ -304,22 +305,27 @@ internal object RoundVideoOrientationFixer {
         private val width: Int,
         private val height: Int,
         private val textureId: Int,
-        inputRotation: Int
+        totalRotation: Int
     ) {
         private val vertexBuffer = floatBuffer(
             -1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f
         )
-        private val texBuffer = textureBufferFor(inputRotation)
+        private val texBuffer = floatBuffer(
+            0f, 1f, 1f, 1f, 0f, 0f, 1f, 0f
+        )
         private val program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
         private val positionLoc = GLES20.glGetAttribLocation(program, "aPosition")
         private val texCoordLoc = GLES20.glGetAttribLocation(program, "aTexCoord")
         private val stMatrixLoc = GLES20.glGetUniformLocation(program, "uSTMatrix")
+        private val rotationLoc = GLES20.glGetUniformLocation(program, "uRotation")
+        private val rotation = totalRotation / 90
 
         fun draw(stMatrix: FloatArray) {
             GLES20.glViewport(0, 0, width, height)
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
             GLES20.glUseProgram(program)
             GLES20.glUniformMatrix4fv(stMatrixLoc, 1, false, stMatrix, 0)
+            GLES20.glUniform1i(rotationLoc, rotation)
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
             GLES20.glEnableVertexAttribArray(positionLoc)
@@ -383,10 +389,11 @@ internal object RoundVideoOrientationFixer {
             }
     }
 
-    private fun textureBufferFor(inputRotation: Int): FloatBuffer {
-        return when (inputRotation) {
-            90, 270 -> floatBuffer(0f, 1f, 0f, 0f, 1f, 1f, 1f, 0f)
-            else -> floatBuffer(1f, 1f, 0f, 1f, 1f, 0f, 0f, 0f)
+    private fun normalizeRotation(rotation: Int): Int {
+        val normalized = ((rotation % 360) + 360) % 360
+        return when (normalized) {
+            90, 180, 270 -> normalized
+            else -> 0
         }
     }
 
@@ -427,10 +434,22 @@ internal object RoundVideoOrientationFixer {
         attribute vec4 aPosition;
         attribute vec2 aTexCoord;
         uniform mat4 uSTMatrix;
+        uniform int uRotation;
         varying vec2 vTexCoord;
         void main() {
             gl_Position = aPosition;
-            vTexCoord = (uSTMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
+            vec2 p = aTexCoord;
+            vec2 rotatedTexCoord;
+            if (uRotation == 1) {
+                rotatedTexCoord = vec2(p.y, 1.0 - p.x);
+            } else if (uRotation == 2) {
+                rotatedTexCoord = vec2(1.0 - p.x, 1.0 - p.y);
+            } else if (uRotation == 3) {
+                rotatedTexCoord = vec2(1.0 - p.y, p.x);
+            } else {
+                rotatedTexCoord = p;
+            }
+            vTexCoord = (uSTMatrix * vec4(rotatedTexCoord, 0.0, 1.0)).xy;
         }
     """
     private const val FRAGMENT_SHADER = """

@@ -747,7 +747,9 @@ internal class ChatRecordingController(
                         val segment = segments.first()
                         if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) {
                             Log.e("VideoUpload", "unexpected first BACK segment; forcing front-start failed")
-                            normalizeRoundVideoForSend(segment, index = 0).file.takeIf { it.exists() && it.length() > 0L }
+                            normalizeRoundVideoForSend(segment, index = 0, forcePixelNormalize = true)
+                                .file
+                                .takeIf { it.exists() && it.length() > 0L }
                         } else {
                             val metadataRotation = readSegmentRotation(segment.file)
                             Log.i(
@@ -764,7 +766,9 @@ internal class ChatRecordingController(
                         val normalizeStart = System.currentTimeMillis()
                         val hasBackSegment = segments.any { it.lensFacing == CameraSelector.LENS_FACING_BACK }
                         val normalized = if (hasBackSegment) {
-                            segments.mapIndexed { index, segment -> normalizeRoundVideoForSend(segment, index) }
+                            segments.mapIndexed { index, segment ->
+                                normalizeRoundVideoForSend(segment, index, forcePixelNormalize = true)
+                            }
                         } else {
                             Log.i(
                                 "VideoUpload",
@@ -773,7 +777,7 @@ internal class ChatRecordingController(
                             segments
                         }
                         val output = File(activity.cacheDir, "video_merged_${System.currentTimeMillis()}.mp4")
-                        concatMp4Segments(normalized.map { it.file }, output)
+                        concatMp4Segments(normalized.map { it.file }, output, forceRotation0 = hasBackSegment)
                         Log.i(
                             "VideoUpload",
                             "concat input count=${normalized.size}/output durationUs=${readVideoDurationUs(output)} size=${output.length()}"
@@ -816,19 +820,27 @@ internal class ChatRecordingController(
         videoRecordFacing = CameraSelector.LENS_FACING_FRONT
     }
 
-    private fun normalizeRoundVideoForSend(segment: VideoSegment, index: Int = -1): VideoSegment {
+    private fun normalizeRoundVideoForSend(
+        segment: VideoSegment,
+        index: Int = -1,
+        forcePixelNormalize: Boolean
+    ): VideoSegment {
         logRoundVideoDiagnostic(segment, "normalizeRoundVideoForSend")
-        if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) {
+        if (forcePixelNormalize) {
             val input = readVideoDiagnostics(segment.file)
-            val output = File(activity.cacheDir, "video_pixel180_${System.currentTimeMillis()}_${segment.file.name}")
-            RoundVideoOrientationFixer.pixelRotateBackSegment180(segment.file, output)
+            val extraRotationDegrees = if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) 180 else 0
+            val output = File(activity.cacheDir, "video_norm0_${System.currentTimeMillis()}_${segment.file.name}")
+            RoundVideoOrientationFixer.normalizeSegmentToRotation0(segment.file, output, extraRotationDegrees)
             val fixed = readVideoDiagnostics(output)
             check(output.exists() && output.length() > 0L && fixed.frameWidth > 0 && fixed.frameHeight > 0) {
-                "pixel180 output not playable"
+                "normalize rotation0 output not playable"
+            }
+            check(fixed.metadataRotation == 0) {
+                "normalize rotation0 output metadataRotation=${fixed.metadataRotation}"
             }
             Log.i(
                 "VideoUpload",
-                "round video segment index=$index lensFacing=${segment.lensFacing} metadataRotation=${input.metadataRotation} fixStrategy=output_space_rotate180"
+                "round video segment index=$index lensFacing=${segment.lensFacing} metadataRotation=${input.metadataRotation} extraRotationDegrees=$extraRotationDegrees correctionMode=PIXEL_NORMALIZE_ROTATION0 outputRotation=${fixed.metadataRotation}"
             )
             return segment.copy(file = output, durationUs = readVideoDurationUs(output))
         }
@@ -941,9 +953,13 @@ internal class ChatRecordingController(
         }
     }
 
-    private fun concatMp4Segments(segments: List<File>, output: File) {
+    private fun concatMp4Segments(segments: List<File>, output: File, forceRotation0: Boolean = false) {
         require(segments.isNotEmpty())
-        val normalizedRotation = commonSegmentRotation(segments) ?: readSegmentRotation(segments.first())
+        val normalizedRotation = if (forceRotation0) {
+            0
+        } else {
+            commonSegmentRotation(segments) ?: readSegmentRotation(segments.first())
+        }
         val firstTracks = readTrackFormats(segments.first())
         try {
             val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
@@ -955,7 +971,10 @@ internal class ChatRecordingController(
                 val buffer = ByteBuffer.allocate(1024 * 1024)
                 val info = MediaCodec.BufferInfo()
                 val offsets = ConcatOffsets()
-                Log.i("VideoUpload", "concat input count=${segments.size} paths=${segments.joinToString { it.absolutePath }}")
+                Log.i(
+                    "VideoUpload",
+                    "concat input count=${segments.size} forceRotation0=$forceRotation0 outputRotationHint=$normalizedRotation paths=${segments.joinToString { it.absolutePath }}"
+                )
                 segments.forEachIndexed { index, segment ->
                     val durationUs = readVideoDurationUs(segment)
                     Log.i("VideoUpload", "concat input index=$index durationUs=$durationUs size=${segment.length()} path=${segment.absolutePath}")

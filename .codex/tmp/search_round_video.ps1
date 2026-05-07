@@ -1,1 +1,1 @@
-rg -n 'correction|Correction|ROTATE|RoundVideoOrientationFixer|fix|back' app/src/main/java/com/rezerv/app/chat/RoundVideoOrientationFixer.kt app/src/main/java/com/rezerv/app/chat/ChatRecordingController.kt
+rg -n 'pixelRotateBackSegment180|normalizeRoundVideoForSend|concatMp4Segments|readRotation|setOrientationHint|vertexBuffer|uSTMatrix|rotation' app/src/main/java/com/rezerv/app/chat/RoundVideoOrientationFixer.kt app/src/main/java/com/rezerv/app/chat/ChatRecordingController.kt
