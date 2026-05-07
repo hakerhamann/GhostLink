@@ -28,6 +28,12 @@ internal object RoundVideoOrientationFixer {
         val videoFormat = tracks.videoFormat ?: error("No video format")
         val width = videoFormat.getInteger(MediaFormat.KEY_WIDTH)
         val height = videoFormat.getInteger(MediaFormat.KEY_HEIGHT)
+        val inputRotation = readRotation(input)
+        val (outWidth, outHeight) = if (inputRotation == 90 || inputRotation == 270) {
+            height to width
+        } else {
+            width to height
+        }
         val durationUs = if (videoFormat.containsKey(MediaFormat.KEY_DURATION)) {
             videoFormat.getLong(MediaFormat.KEY_DURATION)
         } else {
@@ -49,7 +55,7 @@ internal object RoundVideoOrientationFixer {
         try {
             extractor.setDataSource(input.absolutePath)
             extractor.selectTrack(tracks.videoIndex)
-            val encodeFormat = MediaFormat.createVideoFormat(MIME_AVC, width, height).apply {
+            val encodeFormat = MediaFormat.createVideoFormat(MIME_AVC, outWidth, outHeight).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                 setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
                 setInteger(MediaFormat.KEY_FRAME_RATE, 30)
@@ -62,12 +68,13 @@ internal object RoundVideoOrientationFixer {
             outputSurface = CodecInputSurface(inputSurface).apply { makeCurrent() }
             encoder.start()
 
-            decoderSurface = DecoderOutputSurface(width, height)
+            decoderSurface = DecoderOutputSurface(outWidth, outHeight, inputRotation)
             decoder = MediaCodec.createDecoderByType(mime).apply {
                 configure(videoFormat, decoderSurface.surface, null, 0)
                 start()
             }
             muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            muxer.setOrientationHint(0)
             var muxerStarted = false
             var videoMuxTrack = -1
             val audioMuxTrack = tracks.audioFormat?.let { muxer.addTrack(it) } ?: -1
@@ -153,7 +160,7 @@ internal object RoundVideoOrientationFixer {
             if (tracks.audioIndex >= 0 && audioMuxTrack >= 0) copyAudio(input, tracks.audioIndex, muxer, audioMuxTrack)
             Log.i(
                 "VideoUpload",
-                "orientation correction inputWidth=$width inputHeight=$height inputRotation=${readRotation(input)} outputWidth=$width outputHeight=$height outputRotation=${readRotation(output)} fixStrategy=output_space_rotate180 frameWidth=$width frameHeight=$height"
+                "orientation correction inputWidth=$width inputHeight=$height inputRotation=$inputRotation outputWidth=$outWidth outputHeight=$outHeight outputRotation=0 fixStrategy=texture_normalize frameWidth=$outWidth frameHeight=$outHeight"
             )
         } finally {
             runCatching { extractor.release() }
@@ -252,13 +259,13 @@ internal object RoundVideoOrientationFixer {
         }
     }
 
-    private class DecoderOutputSurface(width: Int, height: Int) : SurfaceTexture.OnFrameAvailableListener {
+    private class DecoderOutputSurface(width: Int, height: Int, inputRotation: Int) : SurfaceTexture.OnFrameAvailableListener {
         private val frameSyncObject = Object()
         private var frameAvailable = false
         private val textureId = createTexture()
         private val surfaceTexture = SurfaceTexture(textureId)
         val surface = Surface(surfaceTexture)
-        private val drawer = TextureDrawer(width, height, textureId)
+        private val drawer = TextureDrawer(width, height, textureId, inputRotation)
 
         init {
             surfaceTexture.setOnFrameAvailableListener(this)
@@ -296,12 +303,13 @@ internal object RoundVideoOrientationFixer {
     private class TextureDrawer(
         private val width: Int,
         private val height: Int,
-        private val textureId: Int
+        private val textureId: Int,
+        inputRotation: Int
     ) {
         private val vertexBuffer = floatBuffer(
             -1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f
         )
-        private val texBuffer = floatBuffer(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f)
+        private val texBuffer = textureBufferFor(inputRotation)
         private val program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
         private val positionLoc = GLES20.glGetAttribLocation(program, "aPosition")
         private val texCoordLoc = GLES20.glGetAttribLocation(program, "aTexCoord")
@@ -373,6 +381,13 @@ internal object RoundVideoOrientationFixer {
                 put(values)
                 position(0)
             }
+    }
+
+    private fun textureBufferFor(inputRotation: Int): FloatBuffer {
+        return when (inputRotation) {
+            90, 270 -> floatBuffer(0f, 1f, 0f, 0f, 1f, 1f, 1f, 0f)
+            else -> floatBuffer(1f, 1f, 0f, 1f, 1f, 0f, 0f, 0f)
+        }
     }
 
     private fun createProgram(vertex: String, fragment: String): Int {
