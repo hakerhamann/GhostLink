@@ -775,6 +775,7 @@ def send_message(chat_id: str):
     media_height = 0
     media_widths = None
     media_heights = None
+    media_thumbnail_url = None
     reply_to_message_id = parse_int(data.get("replyToMessageId"), 0)
     reply_to_sender_name = None
     reply_to_text = None
@@ -840,6 +841,12 @@ def send_message(chat_id: str):
             return jsonify({"error": "????????? ???? ?? ??????"}), 404
 
         media_url = video_file_name
+        raw_thumbnail_url = str(data.get("videoThumbnailUrl") or data.get("thumbnailUrl") or data.get("previewUrl") or "").strip()
+        thumbnail_file_name = Path(raw_thumbnail_url).name if raw_thumbnail_url else ""
+        if thumbnail_file_name:
+            thumbnail_path = PHOTO_DIR / thumbnail_file_name
+            if thumbnail_path.exists() and thumbnail_path.is_file():
+                media_thumbnail_url = thumbnail_file_name
         media_duration = max(0, min(parse_int(data.get("videoDurationSec"), 0), MAX_VIDEO_DURATION_SEC))
         if not text:
             text = VIDEO_MESSAGE_FALLBACK_TEXT
@@ -870,6 +877,7 @@ def send_message(chat_id: str):
         media_height=media_height,
         media_widths=media_widths,
         media_heights=media_heights,
+        media_thumbnail_url=media_thumbnail_url,
         reply_to_message_id=reply_to_message_id,
         reply_to_sender_name=reply_to_sender_name,
         reply_to_text=reply_to_text,
@@ -998,7 +1006,7 @@ def delete_message(chat_id: str, message_id: str):
         return jsonify({"error": "?????? ?????????????? ?? ????????"}), 403
 
     message_row = db.execute(
-        "SELECT sender_id, kind, media_url, media_urls FROM messages WHERE id = ? AND chat_id = ?",
+        "SELECT sender_id, kind, media_url, media_urls, media_thumbnail_url FROM messages WHERE id = ? AND chat_id = ?",
         (parsed_message_id, parsed_chat_id),
     ).fetchone()
     if message_row is None:

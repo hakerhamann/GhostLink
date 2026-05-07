@@ -121,6 +121,7 @@ internal class ChatMediaRepository(
     suspend fun sendVideoMessage(
         chatId: String,
         videoUrl: String,
+        videoThumbnailUrl: String?,
         durationSec: Int,
         fallbackText: String,
         replyToMessageId: String?
@@ -130,6 +131,9 @@ internal class ChatMediaRepository(
             .put("videoUrl", videoUrl)
             .put("videoDurationSec", durationSec.coerceAtLeast(0))
             .put("text", fallbackText)
+        if (!videoThumbnailUrl.isNullOrBlank()) {
+            payload.put("videoThumbnailUrl", videoThumbnailUrl)
+        }
         if (!replyToMessageId.isNullOrBlank()) {
             payload.put("replyToMessageId", replyToMessageId)
         }

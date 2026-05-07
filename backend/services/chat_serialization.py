@@ -196,6 +196,7 @@ class ChatSerializationService:
         image_widths = []
         image_heights = []
         video_url = None
+        video_thumbnail_url = None
         video_duration = 0
         if message_kind == "voice":
             voice_url = self.normalize_voice_url(row["media_url"])
@@ -219,6 +220,9 @@ class ChatSerializationService:
                 text = self.image_fallback_text
         elif message_kind == "video":
             video_url = self.normalize_video_url(row["media_url"])
+            video_thumbnail_url = self.normalize_photo_url(
+                row["media_thumbnail_url"] if "media_thumbnail_url" in row.keys() else None
+            )
             video_duration = max(0, int(row["media_duration"] or 0))
             if not text.strip():
                 text = self.video_fallback_text
@@ -287,6 +291,7 @@ class ChatSerializationService:
             "imageWidths": image_widths,
             "imageHeights": image_heights,
             "videoUrl": video_url,
+            "videoThumbnailUrl": video_thumbnail_url,
             "videoDurationSec": video_duration,
             "replyTo": reply_to,
         }

@@ -42,6 +42,8 @@ internal class RoundVideoPlayerController(
     private var shouldStartWhenReady: Boolean = false
     private var videoWidth: Int = 0
     private var videoHeight: Int = 0
+    private var transformApplied: Boolean = false
+    private var firstFrameReadyMessageId: String? = null
 
     private val progressUpdater = object : Runnable {
         override fun run() {
@@ -79,6 +81,7 @@ internal class RoundVideoPlayerController(
             isAutoplay = autoplayMessageId == item.id,
             isExpanded = expandedMessageId == item.id,
             isError = errorMessageId == item.id,
+            isFirstFrameReady = firstFrameReadyMessageId == item.id,
             showTransientOverlay = overlayUntilMs > System.currentTimeMillis() && activeMessageId == item.id,
             downloadProgress = if (downloadingMessageId == item.id) downloadProgress else null,
             durationMs = durationMs,
@@ -101,6 +104,11 @@ internal class RoundVideoPlayerController(
         if ((videoUrl.isBlank() || videoUrl.startsWith("pending://")) && localVideoPath.isBlank()) return
 
         val player = mediaPlayer
+        val localSource = localPlayablePath(textureView.context, item)
+        if (localSource == null && videoUrl.isNotBlank() && !videoUrl.startsWith("pending://")) {
+            downloadOnly(item, textureView, videoUrl)
+            return
+        }
         if (activeMessageId == item.id && player != null) {
             attachTextureView(textureView)
             if (playbackMode == PlaybackMode.AUTOPLAY_MUTED && autoplayMessageId == item.id) {
@@ -149,6 +157,8 @@ internal class RoundVideoPlayerController(
         prepared = false
         videoWidth = 0
         videoHeight = 0
+        transformApplied = false
+        firstFrameReadyMessageId = null
         notifyMessageChanged(previousActive)
         notifyMessageChanged(item.id)
         attachTextureView(textureView)
@@ -178,6 +188,8 @@ internal class RoundVideoPlayerController(
         prepared = false
         videoWidth = 0
         videoHeight = 0
+        transformApplied = false
+        firstFrameReadyMessageId = null
         notifyMessageChanged(previousActive)
         notifyMessageChanged(item.id)
         attachTextureView(textureView)
@@ -254,6 +266,50 @@ internal class RoundVideoPlayerController(
         }
     }
 
+    private fun downloadOnly(item: ChatMessage, textureView: TextureView, videoUrl: String) {
+        val previousActive = activeMessageId
+        release(clearNotifications = true)
+        activeMessageId = item.id
+        downloadingMessageId = item.id
+        preparingMessageId = null
+        expandedMessageId = null
+        autoplayMessageId = null
+        errorMessageId = null
+        completedMessageId = null
+        playbackMode = PlaybackMode.DOWNLOADING
+        downloadProgress = 0f
+        shouldStartWhenReady = false
+        firstFrameReadyMessageId = null
+        val downloadGeneration = nextGeneration()
+        attachTextureView(textureView)
+        notifyMessageChanged(previousActive)
+        notifyMessageChanged(item.id)
+        scope.launch {
+            val file = RoundVideoCache.fileFor(textureView.context, videoUrl) { progress ->
+                progressHandler.post {
+                    if (!isStale(downloadGeneration, item.id) && playbackMode == PlaybackMode.DOWNLOADING) {
+                        downloadProgress = progress
+                        notifyMessageChanged(item.id)
+                    }
+                }
+            }
+            if (isStale(downloadGeneration, item.id) || playbackMode != PlaybackMode.DOWNLOADING) return@launch
+            downloadingMessageId = null
+            downloadProgress = null
+            if (file == null) {
+                errorMessageId = item.id
+                releasePlayerOnly()
+                detachBoundTexture()
+                notifyMessageChanged(item.id)
+                return@launch
+            }
+            activeMessageId = null
+            playbackMode = PlaybackMode.NONE
+            notifyMessageChanged(item.id)
+            startAutoplay(item, textureView)
+        }
+    }
+
     private fun localPlayablePath(context: android.content.Context, item: ChatMessage): String? {
         val localVideoPath = item.localVideoPath?.trim().orEmpty()
         val localFile = localVideoPath.takeIf { it.isNotBlank() }?.let(::File)?.takeIf { it.exists() && it.length() > 0L }
@@ -293,6 +349,8 @@ internal class RoundVideoPlayerController(
                     }
                     this@RoundVideoPlayerController.videoWidth = player.videoWidth
                     this@RoundVideoPlayerController.videoHeight = player.videoHeight
+                    transformApplied = false
+                    firstFrameReadyMessageId = null
                     boundTextureView?.let { applyCenterCrop(it) }
                     if (startAtZero) {
                         runCatching { player.seekTo(0) }.onFailure {
@@ -363,7 +421,13 @@ internal class RoundVideoPlayerController(
                 return true
             }
 
-            override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) = Unit
+            override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) {
+                val messageId = activeMessageId ?: return
+                if (prepared && transformApplied && firstFrameReadyMessageId != messageId) {
+                    firstFrameReadyMessageId = messageId
+                    notifyMessageChanged(messageId)
+                }
+            }
         }
         if (textureView.isAvailable) {
             attachSurface(textureView.surfaceTexture)
@@ -428,6 +492,8 @@ internal class RoundVideoPlayerController(
         shouldStartWhenReady = false
         videoWidth = 0
         videoHeight = 0
+        transformApplied = false
+        firstFrameReadyMessageId = null
         if (!clearNotifications) {
             notifyMessageChanged(previousActive)
             notifyMessageChanged(previousPreparing)
@@ -442,6 +508,8 @@ internal class RoundVideoPlayerController(
         prepared = false
         shouldStartWhenReady = false
         playbackMode = PlaybackMode.NONE
+        transformApplied = false
+        firstFrameReadyMessageId = null
     }
 
     private fun transitionToExpandedPlayback(item: ChatMessage, textureView: TextureView) {
@@ -455,6 +523,8 @@ internal class RoundVideoPlayerController(
         completedMessageId = null
         shouldStartWhenReady = true
         prepared = false
+        transformApplied = false
+        firstFrameReadyMessageId = null
         overlayUntilMs = System.currentTimeMillis() + TAP_OVERLAY_MS
         attachTextureView(textureView)
         notifyMessageChanged(item.id)
@@ -519,12 +589,16 @@ internal class RoundVideoPlayerController(
     private fun clearTextureListener(textureView: TextureView) {
         textureView.surfaceTextureListener = null
         textureView.setTransform(Matrix())
+        textureView.alpha = 0f
     }
 
     private fun applyCenterCrop(textureView: TextureView) {
         val viewWidth = textureView.width.toFloat()
         val viewHeight = textureView.height.toFloat()
-        if (viewWidth <= 0f || viewHeight <= 0f || videoWidth <= 0 || videoHeight <= 0) return
+        if (viewWidth <= 0f || viewHeight <= 0f || videoWidth <= 0 || videoHeight <= 0) {
+            transformApplied = false
+            return
+        }
         val scale = max(viewWidth / videoWidth.toFloat(), viewHeight / videoHeight.toFloat())
         val scaledWidth = videoWidth * scale
         val scaledHeight = videoHeight * scale
@@ -532,6 +606,7 @@ internal class RoundVideoPlayerController(
             setScale(scaledWidth / viewWidth, scaledHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
         }
         textureView.setTransform(matrix)
+        transformApplied = true
     }
 
     private companion object {
@@ -557,6 +632,7 @@ internal data class RoundVideoPlaybackState(
     val isAutoplay: Boolean,
     val isExpanded: Boolean,
     val isError: Boolean,
+    val isFirstFrameReady: Boolean,
     val showTransientOverlay: Boolean,
     val downloadProgress: Float?,
     val durationMs: Int,

@@ -352,7 +352,7 @@ internal class ChatRecordingController(
     private fun switchVideoCameraNow(): Boolean {
         val provider = cameraProvider ?: return false
         val preview = videoPreviewUseCase ?: return false
-        val capture = videoCapture ?: return false
+        videoCapture ?: return false
         val nextFacing = if (videoCameraFacing == CameraSelector.LENS_FACING_FRONT) {
             CameraSelector.LENS_FACING_BACK
         } else {
@@ -360,10 +360,16 @@ internal class ChatRecordingController(
         }
         val selector = CameraSelector.Builder().requireLensFacing(nextFacing).build()
         return runCatching {
+            val recorder = Recorder.Builder()
+                .setQualitySelector(QualitySelector.from(Quality.LOWEST))
+                .setTargetVideoEncodingBitRate(800_000)
+                .build()
+            val capture = VideoCapture.withOutput(recorder)
+            applyVideoTargetRotation(preview, capture)
             provider.unbindAll()
             boundCamera = provider.bindToLifecycle(activity, selector, preview, capture)
             videoCameraFacing = nextFacing
-            applyVideoTargetRotation(preview, capture)
+            videoCapture = capture
             applyVideoFlash()
             true
         }.getOrElse {
@@ -713,12 +719,11 @@ internal class ChatRecordingController(
     }
 
     private fun normalizeRoundVideoForSend(segment: VideoSegment): VideoSegment {
-        val metadataRotation = readSegmentRotation(segment.file)
-        val outputRotation = outputRotationForRoundVideo(metadataRotation, segment.lensFacing)
-        Log.i(
-            "VideoUpload",
-            "normalizeRoundVideoForSend lensFacing=${segment.lensFacing} file=${segment.file.absolutePath} size=${segment.file.length()} metadataRotation=$metadataRotation rootDisplayRotation=${rootDisplayRotationForLog()} videoCaptureTargetRotation=${videoCaptureTargetRotationForLog()} outputRotation=$outputRotation"
-        )
+        logRoundVideoDiagnostic(segment, "normalizeRoundVideoForSend")
+        if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) {
+            return VideoSegment(normalizeBackCameraSegmentIfNeeded(segment.file), segment.lensFacing)
+        }
+        val outputRotation = readSegmentRotation(segment.file)
         val output = File(activity.cacheDir, "video_norm_${System.currentTimeMillis()}_${segment.file.name}")
         val start = System.currentTimeMillis()
         remuxVideoWithOrientation(segment.file, output, outputRotation)
@@ -729,24 +734,34 @@ internal class ChatRecordingController(
         return VideoSegment(output, segment.lensFacing)
     }
 
-    private fun outputRotationForRoundVideo(metadataRotation: Int, lensFacing: Int): Int {
-        return if (lensFacing == CameraSelector.LENS_FACING_BACK) {
-            // CameraX back-camera round clips are observed upside down when uploaded raw.
-            // Remux original camera segment once with a 180 degree metadata correction.
-            normalizeRotation(metadataRotation + 180)
-        } else {
-            metadataRotation
-        }
+    private fun normalizeBackCameraSegmentIfNeeded(segment: File): File {
+        // Back camera CameraX output on this app/device needs capture targetRotation refreshed
+        // before each segment and after lens switch; metadata-only +180 made playback worse in TextureView.
+        val metadataRotation = readSegmentRotation(segment)
+        val output = File(activity.cacheDir, "video_back_norm_${System.currentTimeMillis()}_${segment.name}")
+        val start = System.currentTimeMillis()
+        remuxVideoWithOrientation(segment, output, metadataRotation)
+        val outputRotation = readSegmentRotation(output)
+        Log.i(
+            "VideoUpload",
+            "normalizeBackCameraSegmentIfNeeded inputRotation=$metadataRotation outputRotation=$outputRotation differs=${metadataRotation != outputRotation} ms=${System.currentTimeMillis() - start} inputSize=${segment.length()} outputSize=${output.length()}"
+        )
+        return output.takeIf { it.exists() && it.length() > 0L } ?: segment
     }
 
     private fun logFinalizedVideoSegments(segments: List<VideoSegment>) {
         segments.forEachIndexed { index, segment ->
-            val metadataRotation = readSegmentRotation(segment.file)
-            Log.i(
-                "VideoUpload",
-                "finalized segment index=$index lensFacing=${segment.lensFacing} file=${segment.file.absolutePath} size=${segment.file.length()} metadataRotation=$metadataRotation rootDisplayRotation=${rootDisplayRotationForLog()} videoCaptureTargetRotation=${videoCaptureTargetRotationForLog()} outputRotation=${outputRotationForRoundVideo(metadataRotation, segment.lensFacing)}"
-            )
+            logRoundVideoDiagnostic(segment, "finalized segment index=$index")
         }
+    }
+
+    private fun logRoundVideoDiagnostic(segment: VideoSegment, prefix: String) {
+        val metadata = readVideoDiagnostics(segment.file)
+        val targetRotation = videoCaptureTargetRotationForLog()
+        Log.i(
+            "VideoUpload",
+            "$prefix lensFacing=${segment.lensFacing} singleSegment=${videoSegments.size <= 1} file=${segment.file.absolutePath} size=${segment.file.length()} metadataRotation=${metadata.metadataRotation} retrieverWidth=${metadata.width} retrieverHeight=${metadata.height} trackRotation=${metadata.trackRotation} displayRotation=${rootDisplayRotationForLog()} targetRotation=$targetRotation normalizedDiffers=${metadata.metadataRotation != normalizeRotation(metadata.metadataRotation)}"
+        )
     }
 
     private fun rootDisplayRotationForLog(): Int {
@@ -830,31 +845,45 @@ internal class ChatRecordingController(
     }
 
     private fun readSegmentRotation(segment: File): Int {
-        val metadataRotation = runCatching {
+        return readVideoDiagnostics(segment).metadataRotation
+    }
+
+    private fun readVideoDiagnostics(segment: File): VideoDiagnostics {
+        val metadata = runCatching {
             val retriever = MediaMetadataRetriever()
             try {
                 retriever.setDataSource(segment.absolutePath)
-                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull()
+                Triple(
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull(),
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0,
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                )
             } finally {
                 retriever.release()
             }
         }.getOrNull()
-        if (metadataRotation != null) return normalizeRotation(metadataRotation)
 
         val extractor = MediaExtractor()
-        return try {
+        var trackRotation: Int? = null
+        try {
             extractor.setDataSource(segment.absolutePath)
             for (trackIndex in 0 until extractor.trackCount) {
                 val format = extractor.getTrackFormat(trackIndex)
                 val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
                 if (mime.startsWith("video/") && format.containsKey(MediaFormat.KEY_ROTATION)) {
-                    return normalizeRotation(format.getInteger(MediaFormat.KEY_ROTATION))
+                    trackRotation = normalizeRotation(format.getInteger(MediaFormat.KEY_ROTATION))
+                    break
                 }
             }
-            0
         } finally {
             extractor.release()
         }
+        return VideoDiagnostics(
+            metadataRotation = normalizeRotation(metadata?.first ?: trackRotation ?: 0),
+            width = metadata?.second ?: 0,
+            height = metadata?.third ?: 0,
+            trackRotation = trackRotation
+        )
     }
 
     private fun normalizeRotation(rotation: Int): Int {
@@ -1046,6 +1075,13 @@ internal class ChatRecordingController(
     private data class VideoSegment(
         val file: File,
         val lensFacing: Int
+    )
+
+    private data class VideoDiagnostics(
+        val metadataRotation: Int,
+        val width: Int,
+        val height: Int,
+        val trackRotation: Int?
     )
 
     private companion object {

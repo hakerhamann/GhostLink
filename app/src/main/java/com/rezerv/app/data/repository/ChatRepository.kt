@@ -259,6 +259,7 @@ class ChatRepository(
     suspend fun sendVideoMessage(
         chatId: String,
         videoUrl: String,
+        videoThumbnailUrl: String? = null,
         durationSec: Int,
         fallbackText: String = VIDEO_PREVIEW_TEXT,
         replyToMessageId: String? = null
@@ -266,6 +267,7 @@ class ChatRepository(
         return mediaRepository.sendVideoMessage(
             chatId = chatId,
             videoUrl = videoUrl,
+            videoThumbnailUrl = videoThumbnailUrl,
             durationSec = durationSec,
             fallbackText = fallbackText,
             replyToMessageId = replyToMessageId

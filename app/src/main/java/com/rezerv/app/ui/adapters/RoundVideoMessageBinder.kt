@@ -54,16 +54,21 @@ internal object RoundVideoMessageBinder {
         val cachedVideo = RoundVideoCache.getCachedFileIfExists(container.context, videoUrl)
         val isLoaded = localVideoPath.isNotBlank() || cachedVideo != null
         container.isVisible = true
+        container.clipToOutline = true
         resizeContainer(container, expanded = playback.isExpanded, availableChatWidthPx = availableChatWidthPx)
         container.alpha = 1f
-        placeholderView.isVisible = true
+        val showVideoFrame = playback.isActive &&
+            !playback.isDownloading &&
+            !playback.isPreparing &&
+            playback.isFirstFrameReady
+        placeholderView.isVisible = !showVideoFrame
         val isUploading = item.type == MessageType.VIDEO && item.sendState == MessageSendState.SENDING
         val showCenterControl = isUploading || playback.isDownloading || playback.isPreparing || !isLoaded
         progressView.isVisible = playback.isExpanded && playback.isActive && !playback.isAutoplay
         uploadProgressView.isVisible = showCenterControl && (isUploading || playback.isDownloading)
         playButton.isVisible = showCenterControl
         durationView.isVisible = false
-        textureView.alpha = if (playback.isActive && !playback.isDownloading && !playback.isPreparing) 1f else 0f
+        textureView.alpha = if (showVideoFrame) 1f else 0f
 
         val durationMs = playback.durationMs.takeIf { it > 0 }
             ?: item.videoDurationSec.coerceAtLeast(0) * 1000
@@ -102,10 +107,11 @@ internal object RoundVideoMessageBinder {
             ?: cachedVideo?.absolutePath
             ?: item.videoThumbnailUrl?.trim().orEmpty()
         if (thumbnailSource.startsWith("http://") || thumbnailSource.startsWith("https://")) {
-            thumbnailView.isVisible = true
+            thumbnailView.isVisible = !showVideoFrame
             ImageThumbnailLoader.bind(thumbnailView, thumbnailSource)
         } else {
             RoundVideoThumbnailLoader.bind(thumbnailView, thumbnailSource)
+            if (showVideoFrame) thumbnailView.isVisible = false
         }
         if (playback.isActive) {
             onAttachTexture(textureView)

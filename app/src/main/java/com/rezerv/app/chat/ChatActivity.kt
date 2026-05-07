@@ -2,8 +2,10 @@
 
 import android.Manifest
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -61,6 +63,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import java.io.File
+import java.io.ByteArrayOutputStream
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -1489,11 +1492,15 @@ class ChatActivity : AppCompatActivity() {
             return
         }
         val replyTarget = currentReplyTarget()
+        val thumbnailFile = generateLocalVideoThumbnail(file)
         val optimisticMessage = buildOptimisticVideoMessage(
             user = user,
             durationSec = durationSec,
             replyTarget = replyTarget
-        ).copy(localVideoPath = file.absolutePath)
+        ).copy(
+            localVideoPath = file.absolutePath,
+            videoThumbnailUrl = thumbnailFile?.absolutePath
+        )
         appendOutgoingOverlayMessage(optimisticMessage)
         videoUploadFilesByLocalId[optimisticMessage.id] = file
         clearReplyTarget()
@@ -1502,8 +1509,20 @@ class ChatActivity : AppCompatActivity() {
         val uploadJob = lifecycleScope.launch {
             var cacheReady = false
             var uploadSucceeded = false
+            var thumbnailUploaded = false
             runCatching {
                 val uploadStart = System.currentTimeMillis()
+                val thumbnailUrl = thumbnailFile?.let { thumb ->
+                    runCatching {
+                        AppContainer.chatRepository.uploadPhoto(
+                            chatId = chatId,
+                            imageBytes = thumb.readBytes(),
+                            fileName = thumb.name
+                        )
+                    }.onFailure {
+                        Log.w("VideoUpload", "thumbnail upload skipped: ${it.message}")
+                    }.getOrNull()?.also { thumbnailUploaded = true }
+                }
                 val videoUrl = AppContainer.chatRepository.uploadVideoFile(
                     chatId = chatId,
                     file = file,
@@ -1523,6 +1542,7 @@ class ChatActivity : AppCompatActivity() {
                 AppContainer.chatRepository.sendVideoMessage(
                     chatId = chatId,
                     videoUrl = videoUrl,
+                    videoThumbnailUrl = thumbnailUrl,
                     durationSec = durationSec,
                     fallbackText = VIDEO_PREVIEW_TEXT,
                     replyToMessageId = sanitizeReplyMessageId(replyTarget)
@@ -1532,7 +1552,10 @@ class ChatActivity : AppCompatActivity() {
             }.onSuccess { confirmedMessage ->
                 markOverlayMessageSent(
                     optimisticMessage.id,
-                    confirmedMessage.copy(localVideoPath = if (cacheReady) null else file.absolutePath)
+                    confirmedMessage.copy(
+                        localVideoPath = if (cacheReady) null else file.absolutePath,
+                        videoThumbnailUrl = confirmedMessage.videoThumbnailUrl ?: thumbnailFile?.absolutePath
+                    )
                 )
                 MessageNotificationHelper.cancelChatNotification(this@ChatActivity, chatId)
             }.onFailure { throwable ->
@@ -1558,8 +1581,35 @@ class ChatActivity : AppCompatActivity() {
             if (cacheReady || (uploadSucceeded && !file.exists())) {
                 runCatching { file.delete() }
             }
+            if (thumbnailFile != null && thumbnailUploaded) {
+                runCatching { thumbnailFile.delete() }
+            }
         }
         videoUploadJobsByLocalId[optimisticMessage.id] = uploadJob
+    }
+
+    private fun generateLocalVideoThumbnail(file: File): File? {
+        return runCatching {
+            val bitmap = MediaMetadataRetriever().useFrame(file) ?: return@runCatching null
+            val output = File(cacheDir, "video_thumb_${System.currentTimeMillis()}.jpg")
+            ByteArrayOutputStream().use { bytes ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 82, bytes)
+                output.writeBytes(bytes.toByteArray())
+            }
+            bitmap.recycle()
+            output.takeIf { it.exists() && it.length() > 0L }
+        }.onFailure {
+            Log.w("VideoUpload", "thumbnail generate failed: ${it.message}")
+        }.getOrNull()
+    }
+
+    private fun MediaMetadataRetriever.useFrame(file: File): Bitmap? {
+        return try {
+            setDataSource(file.absolutePath)
+            getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        } finally {
+            release()
+        }
     }
 
     private fun uploadAndSendPhoto(uri: Uri) {

@@ -60,6 +60,7 @@ def init_db(db_path: Path, upload_dirs: Iterable[Path], lock: Lock):
                 media_height INTEGER NOT NULL DEFAULT 0,
                 media_widths TEXT,
                 media_heights TEXT,
+                media_thumbnail_url TEXT,
                 reply_to_message_id INTEGER,
                 reply_to_sender_name TEXT,
                 reply_to_text TEXT,
@@ -106,6 +107,7 @@ def init_db(db_path: Path, upload_dirs: Iterable[Path], lock: Lock):
         ensure_column(db, "messages", "media_height", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(db, "messages", "media_widths", "TEXT")
         ensure_column(db, "messages", "media_heights", "TEXT")
+        ensure_column(db, "messages", "media_thumbnail_url", "TEXT")
         ensure_column(db, "messages", "reply_to_message_id", "INTEGER")
         ensure_column(db, "messages", "reply_to_sender_name", "TEXT")
         ensure_column(db, "messages", "reply_to_text", "TEXT")

@@ -76,6 +76,7 @@ def list_chat_messages(
             m.media_height,
             m.media_widths,
             m.media_heights,
+            m.media_thumbnail_url,
             m.reply_to_message_id,
             m.reply_to_sender_name,
             m.reply_to_text,
@@ -127,12 +128,18 @@ def delete_chat_message(
         media_values = [str(message_row["media_url"] or "").strip()]
         if message_kind == "image":
             media_values.extend(normalize_media_urls(message_row["media_urls"]))
+        if message_kind == "video" and "media_thumbnail_url" in message_row.keys():
+            thumb = str(message_row["media_thumbnail_url"] or "").strip()
+            if thumb:
+                media_values.append(thumb)
         for media_value in media_values:
             if not media_value or "://" in media_value:
                 continue
             if message_kind == "voice":
                 media_dir = voice_dir
             elif message_kind == "image":
+                media_dir = photo_dir
+            elif message_kind == "video" and media_value == str(message_row["media_thumbnail_url"] or "").strip():
                 media_dir = photo_dir
             else:
                 media_dir = video_dir
@@ -200,6 +207,7 @@ def update_chat_message(
             m.media_height,
             m.media_widths,
             m.media_heights,
+            m.media_thumbnail_url,
             m.reply_to_message_id,
             m.reply_to_sender_name,
             m.reply_to_text,
@@ -231,6 +239,7 @@ def create_chat_message(
     media_height: int,
     media_widths,
     media_heights,
+    media_thumbnail_url,
     reply_to_message_id: int,
     reply_to_sender_name,
     reply_to_text,
@@ -251,13 +260,14 @@ def create_chat_message(
             media_height,
             media_widths,
             media_heights,
+            media_thumbnail_url,
             reply_to_message_id,
             reply_to_sender_name,
             reply_to_text,
             created_at,
             updated_at
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         """,
         (
             chat_id,
@@ -271,6 +281,7 @@ def create_chat_message(
             media_height,
             media_widths,
             media_heights,
+            media_thumbnail_url,
             reply_to_message_id if reply_to_message_id > 0 else None,
             reply_to_sender_name,
             reply_to_text,
@@ -315,6 +326,7 @@ def create_chat_message(
             m.media_height,
             m.media_widths,
             m.media_heights,
+            m.media_thumbnail_url,
             m.reply_to_message_id,
             m.reply_to_sender_name,
             m.reply_to_text,
