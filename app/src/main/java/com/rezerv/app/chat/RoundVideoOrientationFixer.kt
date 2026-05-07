@@ -22,21 +22,8 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
 internal object RoundVideoOrientationFixer {
-    fun pixelNormalizeBackSegment(input: File, output: File) {
-        pixelNormalizeSegment(input, output, CorrectionMode.ROTATE_90)
-    }
-
-    fun pixelNormalizeFrontSegment(input: File, output: File, metadataRotation: Int) {
-        val correctionMode = when (((metadataRotation % 360) + 360) % 360) {
-            90 -> CorrectionMode.ROTATE_270
-            180 -> CorrectionMode.ROTATE_180
-            270 -> CorrectionMode.ROTATE_90
-            else -> CorrectionMode.NONE
-        }
-        pixelNormalizeSegment(input, output, correctionMode)
-    }
-
-    private fun pixelNormalizeSegment(input: File, output: File, correctionMode: CorrectionMode) {
+    fun pixelRotateBackSegment180(input: File, output: File) {
+        val correctionMode = CorrectionMode.ROTATE_270
         val tracks = findTracks(input)
         require(tracks.videoIndex >= 0) { "No video track" }
         val videoFormat = tracks.videoFormat ?: error("No video format")
@@ -82,7 +69,6 @@ internal object RoundVideoOrientationFixer {
                 start()
             }
             muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            muxer.setOrientationHint(0)
             var muxerStarted = false
             var videoMuxTrack = -1
             val audioMuxTrack = tracks.audioFormat?.let { muxer.addTrack(it) } ?: -1
@@ -168,7 +154,7 @@ internal object RoundVideoOrientationFixer {
             if (tracks.audioIndex >= 0 && audioMuxTrack >= 0) copyAudio(input, tracks.audioIndex, muxer, audioMuxTrack)
             Log.i(
                 "VideoUpload",
-                "orientation correction inputWidth=$width inputHeight=$height inputRotation=${readRotation(input)} outputWidth=$width outputHeight=$height outputRotation=${readRotation(output)} correctedOutputRotation=${readRotation(output)} correctedTrackRotation=${readRotation(output)} correctionMode=$correctionMode correctionOrder=ST_THEN_CORRECTION correctedFrameWidth=$width correctedFrameHeight=$height"
+                "orientation correction inputWidth=$width inputHeight=$height inputRotation=${readRotation(input)} outputWidth=$width outputHeight=$height outputRotation=${readRotation(output)} correctionMode=$correctionMode frameWidth=$width frameHeight=$height"
             )
         } finally {
             runCatching { extractor.release() }

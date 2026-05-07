@@ -503,7 +503,67 @@ internal class ChatRecordingController(
         isVideoLocked = false
         isVideoCancelledBySwipe = false
         videoSegments.clear()
-        startVideoSegment(resetTimer = true)
+        ensureVideoStartsOnFront(
+            onReady = {
+                startVideoSegment(resetTimer = true)
+            },
+            onError = {
+                binding.videoRecordingContainer.isVisible = false
+                Toast.makeText(activity, "Не удалось запустить видеозапись", Toast.LENGTH_SHORT).show()
+                updateRecordingUi(recording = false, elapsedSec = 0)
+            }
+        )
+    }
+
+    private fun ensureVideoStartsOnFront(onReady: () -> Unit, onError: (Throwable) -> Unit) {
+        videoCameraFacing = CameraSelector.LENS_FACING_FRONT
+        videoRecordFacing = CameraSelector.LENS_FACING_FRONT
+        ensureVideoCapture(
+            onReady = {
+                if (currentBoundLensFacing == CameraSelector.LENS_FACING_FRONT) {
+                    Log.i(
+                        "VideoUpload",
+                        "round video session start forcedFront=true currentBoundLensFacing=$currentBoundLensFacing"
+                    )
+                    onReady()
+                    return@ensureVideoCapture
+                }
+                val provider = cameraProvider
+                if (provider == null) {
+                    onError(IllegalStateException("Camera provider missing before front bind"))
+                    return@ensureVideoCapture
+                }
+                runCatching {
+                    val preview = Preview.Builder().build().apply {
+                        setSurfaceProvider(binding.videoRecordingPreview.surfaceProvider)
+                    }
+                    val recorder = Recorder.Builder()
+                        .setQualitySelector(QualitySelector.from(Quality.LOWEST))
+                        .setTargetVideoEncodingBitRate(800_000)
+                        .build()
+                    val capture = VideoCapture.withOutput(recorder)
+                    applyVideoTargetRotation(preview, capture)
+                    provider.unbindAll()
+                    val selector = CameraSelector.Builder()
+                        .requireLensFacing(CameraSelector.LENS_FACING_FRONT)
+                        .build()
+                    boundCamera = provider.bindToLifecycle(activity, selector, preview, capture)
+                    currentBoundLensFacing = CameraSelector.LENS_FACING_FRONT
+                    videoCameraFacing = CameraSelector.LENS_FACING_FRONT
+                    videoRecordFacing = CameraSelector.LENS_FACING_FRONT
+                    videoPreviewUseCase = preview
+                    videoCapture = capture
+                    applyVideoFlash()
+                    Log.i(
+                        "VideoUpload",
+                        "round video session start forcedFront=true currentBoundLensFacing=$currentBoundLensFacing"
+                    )
+                }.onSuccess {
+                    onReady()
+                }.onFailure(onError)
+            },
+            onError = onError
+        )
     }
 
     @SuppressLint("MissingPermission")
@@ -516,7 +576,7 @@ internal class ChatRecordingController(
                 pendingVideoSendAfterStop = true
                 videoRecordFile = tempFile
                 videoRecordFacing = currentBoundLensFacing
-                logRoundVideoOrientation("record start", videoRecordFacing, tempFile, false)
+                logRoundVideoOrientation("record start forcedFront=${resetTimer && videoRecordFacing == CameraSelector.LENS_FACING_FRONT}", videoRecordFacing, tempFile, false)
 
                 videoRecording = capture.output
                     .prepareRecording(activity, outputOptions)
@@ -579,6 +639,7 @@ internal class ChatRecordingController(
             }
             recordingStartedAtMs = 0L
             updateRecordingUi(recording = false, elapsedSec = 0)
+            resetVideoFacingForNextSession()
             if (pendingCameraSwitchAfterFinalize) {
                 pendingCameraSwitchAfterFinalize = false
                 switchVideoCameraNow()
@@ -633,6 +694,7 @@ internal class ChatRecordingController(
 
         recordingStartedAtMs = 0L
         updateRecordingUi(recording = false, elapsedSec = 0)
+        resetVideoFacingForNextSession()
 
         if (event.hasError()) {
             runCatching { file?.delete() }
@@ -682,48 +744,45 @@ internal class ChatRecordingController(
                     if (segments.size == 1) {
                         val segment = segments.first()
                         if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) {
-                            prepareRoundVideoForSend(segment).file.takeIf { it.exists() && it.length() > 0L }
+                            Log.w("VideoUpload", "unexpected single_back_after_front_lock")
+                            normalizeRoundVideoForSend(segment, index = 0).file.takeIf { it.exists() && it.length() > 0L }
                         } else {
-                            val prepared = prepareRawFrontSegment(segment)
-                            val raw = readVideoDiagnostics(prepared.file)
+                            val metadataRotation = readSegmentRotation(segment.file)
                             Log.i(
                                 "VideoUpload",
-                                "FRONT_ONLY_RAW_OK metadataRotation=${raw.metadataRotation} trackRotation=${raw.trackRotation} width=${raw.width} height=${raw.height}"
+                                "normalize skipped reason=single_front lensFacing=${segment.lensFacing} file=${segment.file.absolutePath} size=${segment.file.length()} metadataRotation=$metadataRotation outputRotation=$metadataRotation"
                             )
                             Log.i(
                                 "VideoUpload",
-                                "final send scenario=single_front segmentIndex=0 lensFacing=${prepared.lensFacing} rawMetadataRotation=${raw.metadataRotation} rawTrackRotation=${raw.trackRotation} selectedCorrectionMode=NONE selectedCorrectionOrder=NONE preparedMetadataRotation=${raw.metadataRotation} preparedTrackRotation=${raw.trackRotation} finalOutputMetadataRotation=${raw.metadataRotation} finalOutputTrackRotation=${raw.trackRotation} durationUs=${readVideoDurationUs(prepared.file)} fileSize=${prepared.file.length()}"
+                                "final send scenario=single_front outputRotation=$metadataRotation durationUs=${readVideoDurationUs(segment.file)}"
                             )
-                            prepared.file.takeIf { it.exists() && it.length() > 0L }
+                            segment.file.takeIf { it.exists() && it.length() > 0L }
                         }
                     } else {
                         val normalizeStart = System.currentTimeMillis()
-                        val prepared = segments.map { prepareRoundVideoForSend(it, forceNormalizeFront = true) }
-                        val allPixelsUpright = prepared.all { it.pixelsUpright }
+                        val hasBackSegment = segments.any { it.lensFacing == CameraSelector.LENS_FACING_BACK }
+                        val normalized = if (hasBackSegment) {
+                            segments.mapIndexed { index, segment -> normalizeRoundVideoForSend(segment, index) }
+                        } else {
+                            Log.i(
+                                "VideoUpload",
+                                "normalize skipped reason=multi_front segments=${segments.size}"
+                            )
+                            segments
+                        }
                         val output = File(activity.cacheDir, "video_merged_${System.currentTimeMillis()}.mp4")
                         val concatStart = System.currentTimeMillis()
-                        concatMp4Segments(prepared, output)
+                        concatMp4Segments(normalized.map { it.file }, output)
                         Log.i(
                             "VideoUpload",
-                            "concat end ms=${System.currentTimeMillis() - concatStart} segments=${prepared.size} outputSize=${output.length()}"
+                            "concat end ms=${System.currentTimeMillis() - concatStart} segments=${normalized.size} outputSize=${output.length()}"
                         )
-                        prepared.forEach { segment ->
+                        normalized.forEach { segment ->
                             if (segment.file !in segments.map { it.file }) runCatching { segment.file.delete() }
                         }
-                        val outputMetadata = readVideoDiagnostics(output)
-                        val scenario = inferRoundVideoScenario(segments)
-                        prepared.forEachIndexed { index, preparedSegment ->
-                            logFinalSendSegment(
-                                scenario = scenario,
-                                index = index,
-                                rawSegment = segments[index],
-                                preparedSegment = preparedSegment,
-                                finalOutput = output
-                            )
-                        }
                         Log.i(
                             "VideoUpload",
-                            "normalize+concat end scenario=$scenario ms=${System.currentTimeMillis() - normalizeStart} normalized=$allPixelsUpright inputSize=${segments.sumOf { it.file.length() }} outputSize=${output.length()} finalOutputMetadataRotation=${outputMetadata.metadataRotation} finalOutputTrackRotation=${outputMetadata.trackRotation} finalDurationUs=${readVideoDurationUs(output)}"
+                            "normalize+concat end scenario=${inferRoundVideoScenario(segments)} ms=${System.currentTimeMillis() - normalizeStart} normalized=$hasBackSegment inputSize=${segments.sumOf { it.file.length() }} outputSize=${output.length()} outputRotation=${readSegmentRotation(output)} durationUs=${readVideoDurationUs(output)}"
                         )
                         output.takeIf { it.exists() && it.length() > 0L }
                     }
@@ -751,70 +810,58 @@ internal class ChatRecordingController(
         videoSegments.clear()
     }
 
-    private fun prepareRawFrontSegment(segment: VideoSegment): PreparedVideoSegment {
-        val metadata = readVideoDiagnostics(segment.file)
-        val prepared = PreparedVideoSegment(
-            file = segment.file,
-            lensFacing = segment.lensFacing,
-            pixelsUpright = false,
-            containerRotation = metadata.metadataRotation,
-            durationUs = segment.durationUs ?: readVideoDurationUs(segment.file)
-        )
-        logPreparedVideoSegment(prepared, "prepared raw")
-        return prepared
+    private fun resetVideoFacingForNextSession() {
+        videoCameraFacing = CameraSelector.LENS_FACING_FRONT
+        videoRecordFacing = CameraSelector.LENS_FACING_FRONT
     }
 
-    private fun prepareRoundVideoForSend(
-        segment: VideoSegment,
-        forceNormalizeFront: Boolean = false
-    ): PreparedVideoSegment {
+    private fun normalizeRoundVideoForSend(segment: VideoSegment, index: Int = -1): VideoSegment {
         logRoundVideoDiagnostic(segment, "normalizeRoundVideoForSend")
         if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) {
             val input = readVideoDiagnostics(segment.file)
-            val output = File(activity.cacheDir, "video_back_upright_${System.currentTimeMillis()}_${segment.file.name}")
+            val output = File(activity.cacheDir, "video_pixel180_${System.currentTimeMillis()}_${segment.file.name}")
             val start = System.currentTimeMillis()
-            RoundVideoOrientationFixer.pixelNormalizeBackSegment(segment.file, output)
+            RoundVideoOrientationFixer.pixelRotateBackSegment180(segment.file, output)
             val fixed = readVideoDiagnostics(output)
             check(output.exists() && output.length() > 0L && fixed.frameWidth > 0 && fixed.frameHeight > 0) {
-                "back normalized output not playable"
+                "pixel180 output not playable"
             }
             Log.i(
                 "VideoUpload",
-                "round video orientation: lens=BACK sensor=${boundCameraSensorOrientationForLog()} display=${rootDisplayRotationForLog()} inputRotation=${input.metadataRotation} correctionMode=ROTATE_90 correctionOrder=ST_THEN_CORRECTION correctedOutputRotation=${fixed.metadataRotation} correctedTrackRotation=${fixed.trackRotation} correctedFrameWidth=${fixed.frameWidth} correctedFrameHeight=${fixed.frameHeight} input=${segment.file.absolutePath} inputSize=${segment.file.length()} output=${output.absolutePath} outputSize=${output.length()} ms=${System.currentTimeMillis() - start}"
+                "round video segment index=$index lensFacing=${segment.lensFacing} metadataRotation=${input.metadataRotation} correctionMode=ROTATE_270"
             )
-            return PreparedVideoSegment(
-                file = output,
-                lensFacing = segment.lensFacing,
-                pixelsUpright = true,
-                containerRotation = 0,
-                durationUs = readVideoDurationUs(output),
-                correctionMode = "ROTATE_90",
-                correctionOrder = "ST_THEN_CORRECTION"
-            ).also { logPreparedVideoSegment(it, "prepared normalized") }
+            Log.i(
+                "VideoUpload",
+                "round video orientation: lens=BACK sensor=${boundCameraSensorOrientationForLog()} display=${rootDisplayRotationForLog()} inputRotation=${input.metadataRotation} outputRotation=${fixed.metadataRotation} correctionMode=ROTATE_270 input=${segment.file.absolutePath} inputSize=${segment.file.length()} output=${output.absolutePath} outputSize=${output.length()} ms=${System.currentTimeMillis() - start}"
+            )
+            return segment.copy(file = output, durationUs = readVideoDurationUs(output))
         }
-        if (!forceNormalizeFront) return prepareRawFrontSegment(segment)
-
-        val input = readVideoDiagnostics(segment.file)
-        val output = File(activity.cacheDir, "video_front_upright_${System.currentTimeMillis()}_${segment.file.name}")
+        val outputRotation = readSegmentRotation(segment.file)
+        val output = File(activity.cacheDir, "video_norm_${System.currentTimeMillis()}_${segment.file.name}")
         val start = System.currentTimeMillis()
-        RoundVideoOrientationFixer.pixelNormalizeFrontSegment(segment.file, output, input.metadataRotation)
-        val fixed = readVideoDiagnostics(output)
-        check(output.exists() && output.length() > 0L && fixed.frameWidth > 0 && fixed.frameHeight > 0) {
-            "front normalized output not playable"
-        }
+        remuxVideoWithOrientation(segment.file, output, outputRotation)
         Log.i(
             "VideoUpload",
-            "round video orientation: lens=FRONT inputRotation=${input.metadataRotation} inputTrackRotation=${input.trackRotation} correctionMode=${frontCorrectionModeForLog(input.metadataRotation)} correctionOrder=ST_THEN_CORRECTION correctedOutputRotation=${fixed.metadataRotation} correctedTrackRotation=${fixed.trackRotation} correctedFrameWidth=${fixed.frameWidth} correctedFrameHeight=${fixed.frameHeight} input=${segment.file.absolutePath} inputSize=${segment.file.length()} output=${output.absolutePath} outputSize=${output.length()} ms=${System.currentTimeMillis() - start}"
+            "normalize end ms=${System.currentTimeMillis() - start} inputSize=${segment.file.length()} outputSize=${output.length()}"
         )
-        return PreparedVideoSegment(
-            file = output,
-            lensFacing = segment.lensFacing,
-            pixelsUpright = true,
-            containerRotation = 0,
-            durationUs = readVideoDurationUs(output),
-            correctionMode = frontCorrectionModeForLog(input.metadataRotation),
-            correctionOrder = "ST_THEN_CORRECTION"
-        ).also { logPreparedVideoSegment(it, "prepared normalized") }
+        Log.i(
+            "VideoUpload",
+            "round video segment index=$index lensFacing=${segment.lensFacing} metadataRotation=$outputRotation correctionMode=NONE"
+        )
+        return segment.copy(file = output, durationUs = readVideoDurationUs(output))
+    }
+
+    private fun inferRoundVideoScenario(segments: List<VideoSegment>): String {
+        val first = segments.firstOrNull()?.lensFacing
+        val hasFront = segments.any { it.lensFacing == CameraSelector.LENS_FACING_FRONT }
+        val hasBack = segments.any { it.lensFacing == CameraSelector.LENS_FACING_BACK }
+        return when {
+            segments.size == 1 && first == CameraSelector.LENS_FACING_FRONT -> "single_front"
+            segments.size == 1 && first == CameraSelector.LENS_FACING_BACK -> "single_back"
+            hasFront && hasBack && first == CameraSelector.LENS_FACING_FRONT -> "multi_front_back"
+            hasFront && hasBack && first == CameraSelector.LENS_FACING_BACK -> "multi_back_front"
+            else -> "multi_same_lens"
+        }
     }
 
     private fun logFinalizedVideoSegments(segments: List<VideoSegment>) {
@@ -831,52 +878,6 @@ internal class ChatRecordingController(
             "VideoUpload",
             "$prefix lensFacing=${segment.lensFacing} actualBoundLensFacing=$currentBoundLensFacing cameraId=${boundCameraIdForLog()} file=${segment.file.absolutePath} size=${segment.file.length()} retrieverWidth=${metadata.width} retrieverHeight=${metadata.height} frameWidth=${metadata.frameWidth} frameHeight=${metadata.frameHeight} metadataRotation=${metadata.metadataRotation} trackRotation=${metadata.trackRotation} displayRotation=${rootDisplayRotationForLog()} previewTargetRotation=$previewTargetRotation videoCaptureTargetRotation=$videoTargetRotation sensorOrientation=${boundCameraSensorOrientationForLog()} normalized=false outputRotation=${metadata.metadataRotation} fixStrategy=${if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) "st_matrix_rotate270" else "none"}"
         )
-    }
-
-    private fun logPreparedVideoSegment(segment: PreparedVideoSegment, prefix: String) {
-        val metadata = readVideoDiagnostics(segment.file)
-        Log.i(
-            "VideoUpload",
-            "$prefix lensFacing=${segment.lensFacing} file=${segment.file.absolutePath} size=${segment.file.length()} metadataRotation=${metadata.metadataRotation} trackRotation=${metadata.trackRotation} width=${metadata.width} height=${metadata.height} normalized=${segment.pixelsUpright} correctionMode=${segment.correctionMode} correctionOrder=${segment.correctionOrder} containerRotation=${segment.containerRotation} durationUs=${segment.durationUs}"
-        )
-    }
-
-    private fun logFinalSendSegment(
-        scenario: String,
-        index: Int,
-        rawSegment: VideoSegment,
-        preparedSegment: PreparedVideoSegment,
-        finalOutput: File
-    ) {
-        val raw = readVideoDiagnostics(rawSegment.file)
-        val prepared = readVideoDiagnostics(preparedSegment.file)
-        val final = readVideoDiagnostics(finalOutput)
-        Log.i(
-            "VideoUpload",
-            "final send scenario=$scenario segmentIndex=$index lensFacing=${rawSegment.lensFacing} rawMetadataRotation=${raw.metadataRotation} rawTrackRotation=${raw.trackRotation} selectedCorrectionMode=${preparedSegment.correctionMode} selectedCorrectionOrder=${preparedSegment.correctionOrder} preparedMetadataRotation=${prepared.metadataRotation} preparedTrackRotation=${prepared.trackRotation} finalOutputMetadataRotation=${final.metadataRotation} finalOutputTrackRotation=${final.trackRotation} durationUs=${preparedSegment.durationUs ?: readVideoDurationUs(preparedSegment.file)} fileSize=${preparedSegment.file.length()}"
-        )
-    }
-
-    private fun frontCorrectionModeForLog(metadataRotation: Int): String {
-        return when (normalizeRotation(metadataRotation)) {
-            90 -> "ROTATE_270"
-            180 -> "ROTATE_180"
-            270 -> "ROTATE_90"
-            else -> "NONE"
-        }
-    }
-
-    private fun inferRoundVideoScenario(segments: List<VideoSegment>): String {
-        val first = segments.firstOrNull()?.lensFacing
-        val hasFront = segments.any { it.lensFacing == CameraSelector.LENS_FACING_FRONT }
-        val hasBack = segments.any { it.lensFacing == CameraSelector.LENS_FACING_BACK }
-        return when {
-            segments.size == 1 && first == CameraSelector.LENS_FACING_FRONT -> "single_front"
-            segments.size == 1 && first == CameraSelector.LENS_FACING_BACK -> "single_back"
-            hasFront && hasBack && first == CameraSelector.LENS_FACING_FRONT -> "multi_front_back"
-            hasFront && hasBack && first == CameraSelector.LENS_FACING_BACK -> "multi_back_front"
-            else -> "multi_same_lens"
-        }
     }
 
     private fun rootDisplayRotationForLog(): Int {
@@ -921,8 +922,7 @@ internal class ChatRecordingController(
             try {
                 muxer.setOrientationHint(orientation)
                 for (trackIndex in 0 until extractor.trackCount) {
-                    val format = extractor.getTrackFormat(trackIndex)
-                    trackIndexMap[trackIndex] = muxer.addTrack(format)
+                    trackIndexMap[trackIndex] = muxer.addTrack(extractor.getTrackFormat(trackIndex))
                 }
                 muxer.start()
                 val buffer = ByteBuffer.allocate(1024 * 1024)
@@ -950,35 +950,31 @@ internal class ChatRecordingController(
         }
     }
 
-    private fun concatMp4Segments(segments: List<PreparedVideoSegment>, output: File) {
+    private fun concatMp4Segments(segments: List<File>, output: File) {
         require(segments.isNotEmpty())
-        val firstTracks = readTrackFormats(segments.first().file)
-        val outputRotation = concatOutputRotation(segments)
+        val normalizedRotation = commonSegmentRotation(segments) ?: readSegmentRotation(segments.first())
+        val firstTracks = readTrackFormats(segments.first())
         try {
             val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             try {
-                muxer.setOrientationHint(outputRotation)
-                val outputVideoTrack = firstTracks.videoFormat?.let {
-                    muxer.addTrack(it)
-                } ?: -1
+                muxer.setOrientationHint(normalizedRotation)
+                val outputVideoTrack = firstTracks.videoFormat?.let { muxer.addTrack(it) } ?: -1
                 val outputAudioTrack = firstTracks.audioFormat?.let { muxer.addTrack(it) } ?: -1
                 muxer.start()
                 val buffer = ByteBuffer.allocate(1024 * 1024)
                 val info = MediaCodec.BufferInfo()
                 val offsets = ConcatOffsets()
-                Log.i("VideoUpload", "concat input count=${segments.size} outputRotation=$outputRotation allPixelsUpright=${segments.all { it.pixelsUpright }} paths=${segments.joinToString { it.file.absolutePath }}")
+                Log.i("VideoUpload", "concat input count=${segments.size} paths=${segments.joinToString { it.absolutePath }}")
                 segments.forEachIndexed { index, segment ->
-                    val durationUs = readVideoDurationUs(segment.file)
-                    val metadata = readVideoDiagnostics(segment.file)
-                    Log.i("VideoUpload", "concat input index=$index lensFacing=${segment.lensFacing} durationUs=$durationUs metadataRotation=${metadata.metadataRotation} trackRotation=${metadata.trackRotation} width=${metadata.width} height=${metadata.height} normalized=${segment.pixelsUpright} correctionMode=${segment.correctionMode} correctionOrder=${segment.correctionOrder} containerRotation=${segment.containerRotation} size=${segment.file.length()} path=${segment.file.absolutePath}")
-                    appendSegmentToMuxer(segment.file, muxer, outputVideoTrack, outputAudioTrack, offsets, buffer, info)
+                    val durationUs = readVideoDurationUs(segment)
+                    Log.i("VideoUpload", "concat input index=$index durationUs=$durationUs size=${segment.length()} path=${segment.absolutePath}")
+                    appendSegmentToMuxer(segment, muxer, outputVideoTrack, outputAudioTrack, offsets, buffer, info)
                 }
                 muxer.stop()
                 val outTracks = readTrackFormats(output)
-                val outMetadata = readVideoDiagnostics(output)
                 Log.i(
                     "VideoUpload",
-                    "concat output durationUs=${readVideoDurationUs(output)} size=${output.length()} metadataRotation=${outMetadata.metadataRotation} trackRotation=${outMetadata.trackRotation} trackOrder=video:${outTracks.videoIndex},audio:${outTracks.audioIndex}"
+                    "concat output durationUs=${readVideoDurationUs(output)} size=${output.length()} trackOrder=video:${outTracks.videoIndex},audio:${outTracks.audioIndex}"
                 )
             } finally {
                 runCatching { muxer.release() }
@@ -987,13 +983,9 @@ internal class ChatRecordingController(
         }
     }
 
-    private fun concatOutputRotation(segments: List<PreparedVideoSegment>): Int {
-        if (segments.all { it.pixelsUpright }) return 0
-        val rawRotations = segments.filterNot { it.pixelsUpright }.map { it.containerRotation }.distinct()
-        check(rawRotations.size == 1 && segments.none { it.pixelsUpright }) {
-            "Cannot concat mixed raw-rotation and normalized round-video segments"
-        }
-        return rawRotations.singleOrNull() ?: 0
+    private fun commonSegmentRotation(segments: List<File>): Int? {
+        val rotations = segments.map { readSegmentRotation(it) }.distinct()
+        return rotations.singleOrNull()
     }
 
     private fun readSegmentRotation(segment: File): Int {
@@ -1264,6 +1256,7 @@ internal class ChatRecordingController(
         runCatching { videoRecordFile?.delete() }
         videoRecordFile = null
         videoRecordFacing = CameraSelector.LENS_FACING_FRONT
+        videoCameraFacing = CameraSelector.LENS_FACING_FRONT
         currentBoundLensFacing = CameraSelector.LENS_FACING_FRONT
         deleteVideoSegments()
         runCatching { cameraProvider?.unbindAll() }
@@ -1296,16 +1289,6 @@ internal class ChatRecordingController(
         val lensFacing: Int,
         val startedAtMs: Long? = null,
         val durationUs: Long? = null
-    )
-
-    private data class PreparedVideoSegment(
-        val file: File,
-        val lensFacing: Int,
-        val pixelsUpright: Boolean,
-        val containerRotation: Int,
-        val durationUs: Long?,
-        val correctionMode: String = "NONE",
-        val correctionOrder: String = "NONE"
     )
 
     private data class SegmentTrackFormats(
