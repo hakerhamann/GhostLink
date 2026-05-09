@@ -70,6 +70,9 @@ internal object RoundVideoOrientationFixer {
             encoder.start()
 
             decoderSurface = DecoderOutputSurface(outWidth, outHeight, totalRotation)
+            if (videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
+                videoFormat.setInteger(MediaFormat.KEY_ROTATION, 0)
+            }
             decoder = MediaCodec.createDecoderByType(mime).apply {
                 configure(videoFormat, decoderSurface.surface, null, 0)
                 start()
@@ -161,7 +164,7 @@ internal object RoundVideoOrientationFixer {
             if (tracks.audioIndex >= 0 && audioMuxTrack >= 0) copyAudio(input, tracks.audioIndex, muxer, audioMuxTrack)
             Log.i(
                 "VideoUpload",
-                "normalize segment inputWidth=$width inputHeight=$height inputRotation=$inputRotation totalRotationApplied=$totalRotation outWidth=$outWidth outHeight=$outHeight outputMetadataRotation=0 fixStrategy=metadata_rotation frameWidth=$outWidth frameHeight=$outHeight"
+                "normalize segment decoderRotationNeutralized=true inputRotation=$inputRotation totalRotationApplied=$totalRotation outputMetadataRotation=0 inputWidth=$width inputHeight=$height outWidth=$outWidth outHeight=$outHeight fixStrategy=metadata_rotation frameWidth=$outWidth frameHeight=$outHeight"
             )
         } finally {
             runCatching { extractor.release() }
