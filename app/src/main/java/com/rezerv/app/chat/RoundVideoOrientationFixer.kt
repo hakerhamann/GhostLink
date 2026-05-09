@@ -453,11 +453,7 @@ internal object RoundVideoOrientationFixer {
         uniform int uMirrorX;
         varying vec2 vTexCoord;
         void main() {
-            vec4 pos = aPosition;
-            if (uMirrorX == 1) {
-                pos.x = -pos.x;
-            }
-            gl_Position = pos;
+            gl_Position = aPosition;
             vec2 p = aTexCoord;
             vec2 rotatedTexCoord;
             // Do not remove: Samsung S22 Ultra fix. Decoder rotation is neutralized; shader applies metadata rotation exactly once.
@@ -470,7 +466,11 @@ internal object RoundVideoOrientationFixer {
             } else {
                 rotatedTexCoord = p;
             }
-            vTexCoord = (uSTMatrix * vec4(rotatedTexCoord, 0.0, 1.0)).xy;
+            vec2 finalTexCoord = (uSTMatrix * vec4(rotatedTexCoord, 0.0, 1.0)).xy;
+            if (uMirrorX == 1) {
+                finalTexCoord.x = 1.0 - finalTexCoord.x;
+            }
+            vTexCoord = finalTexCoord;
         }
     """
     private const val FRAGMENT_SHADER = """
