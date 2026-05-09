@@ -803,10 +803,10 @@ internal class ChatRecordingController(
     ): VideoSegment {
         logRoundVideoDiagnostic(segment, "normalizeRoundVideoForSend")
         val input = readVideoDiagnostics(segment.file)
-        // Do not mirror encoded round-video pixels by lens. Front and back output files must be real-world left/right; CameraX/decoder rotation is handled separately.
+        // Do not mirror encoded pixels by lens. Back-camera output on Samsung S22 Ultra is correct only with mirrorX=false. Preview/thumbnail mirroring is handled elsewhere.
         val mirrorX = false
         val output = File(activity.cacheDir, "video_norm0_${System.currentTimeMillis()}_${segment.file.name}")
-        RoundVideoOrientationFixer.normalizeSegmentToRotation0(segment.file, output, mirrorX = false)
+        RoundVideoOrientationFixer.normalizeSegmentToRotation0(segment.file, output, mirrorX)
         val fixed = readVideoDiagnostics(output)
         check(output.exists() && output.length() > 0L && fixed.frameWidth > 0 && fixed.frameHeight > 0) {
             "normalize rotation0 output not playable"
