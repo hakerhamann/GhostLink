@@ -73,6 +73,7 @@ internal object RoundVideoOrientationFixer {
             if (videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
                 videoFormat.setInteger(MediaFormat.KEY_ROTATION, 0)
             }
+            // Do not remove: Samsung S22 Ultra fix. Decoder rotation is neutralized; shader applies metadata rotation exactly once.
             decoder = MediaCodec.createDecoderByType(mime).apply {
                 configure(videoFormat, decoderSurface.surface, null, 0)
                 start()
@@ -164,7 +165,7 @@ internal object RoundVideoOrientationFixer {
             if (tracks.audioIndex >= 0 && audioMuxTrack >= 0) copyAudio(input, tracks.audioIndex, muxer, audioMuxTrack)
             Log.i(
                 "VideoUpload",
-                "normalize segment decoderRotationNeutralized=true inputRotation=$inputRotation totalRotationApplied=$totalRotation outputMetadataRotation=0 inputWidth=$width inputHeight=$height outWidth=$outWidth outHeight=$outHeight fixStrategy=metadata_rotation frameWidth=$outWidth frameHeight=$outHeight"
+                "normalize segment decoderRotationNeutralized=true mirrorX=true inputRotation=$inputRotation totalRotationApplied=$totalRotation outputMetadataRotation=0 inputWidth=$width inputHeight=$height outWidth=$outWidth outHeight=$outHeight fixStrategy=metadata_rotation frameWidth=$outWidth frameHeight=$outHeight"
             )
         } finally {
             runCatching { extractor.release() }
@@ -324,7 +325,9 @@ internal object RoundVideoOrientationFixer {
         private val texCoordLoc = GLES20.glGetAttribLocation(program, "aTexCoord")
         private val stMatrixLoc = GLES20.glGetUniformLocation(program, "uSTMatrix")
         private val rotationLoc = GLES20.glGetUniformLocation(program, "uRotation")
+        private val mirrorXLoc = GLES20.glGetUniformLocation(program, "uMirrorX")
         private val rotation = totalRotation / 90
+        private val mirrorX = true
 
         fun draw(stMatrix: FloatArray) {
             GLES20.glViewport(0, 0, width, height)
@@ -332,6 +335,7 @@ internal object RoundVideoOrientationFixer {
             GLES20.glUseProgram(program)
             GLES20.glUniformMatrix4fv(stMatrixLoc, 1, false, stMatrix, 0)
             GLES20.glUniform1i(rotationLoc, rotation)
+            GLES20.glUniform1i(mirrorXLoc, if (mirrorX) 1 else 0)
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
             GLES20.glEnableVertexAttribArray(positionLoc)
@@ -441,11 +445,16 @@ internal object RoundVideoOrientationFixer {
         attribute vec2 aTexCoord;
         uniform mat4 uSTMatrix;
         uniform int uRotation;
+        uniform int uMirrorX;
         varying vec2 vTexCoord;
         void main() {
             gl_Position = aPosition;
             vec2 p = aTexCoord;
+            if (uMirrorX == 1) {
+                p.x = 1.0 - p.x;
+            }
             vec2 rotatedTexCoord;
+            // Do not remove: Samsung S22 Ultra fix. Decoder rotation is neutralized; shader applies metadata rotation exactly once.
             if (uRotation == 1) {
                 rotatedTexCoord = vec2(p.y, 1.0 - p.x);
             } else if (uRotation == 2) {
