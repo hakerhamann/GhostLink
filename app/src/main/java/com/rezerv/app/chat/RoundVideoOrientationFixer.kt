@@ -453,7 +453,11 @@ internal object RoundVideoOrientationFixer {
         uniform int uMirrorX;
         varying vec2 vTexCoord;
         void main() {
-            gl_Position = aPosition;
+            vec4 pos = aPosition;
+            if (uMirrorX == 1) {
+                pos.x = -pos.x;
+            }
+            gl_Position = pos;
             vec2 p = aTexCoord;
             vec2 rotatedTexCoord;
             // Do not remove: Samsung S22 Ultra fix. Decoder rotation is neutralized; shader applies metadata rotation exactly once.
@@ -465,9 +469,6 @@ internal object RoundVideoOrientationFixer {
                 rotatedTexCoord = vec2(1.0 - p.y, p.x);
             } else {
                 rotatedTexCoord = p;
-            }
-            if (uMirrorX == 1) {
-                rotatedTexCoord.x = 1.0 - rotatedTexCoord.x;
             }
             vTexCoord = (uSTMatrix * vec4(rotatedTexCoord, 0.0, 1.0)).xy;
         }

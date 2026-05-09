@@ -803,7 +803,7 @@ internal class ChatRecordingController(
     ): VideoSegment {
         logRoundVideoDiagnostic(segment, "normalizeRoundVideoForSend")
         val input = readVideoDiagnostics(segment.file)
-        // Back-camera encoded pixels need output-space horizontal mirror. Do not use rotation hacks. Front remains mirrorX=false.
+        // Back camera needs output-space horizontal mirror. Do not mirror texture coordinates; mirror final quad geometry only.
         val mirrorX = segment.lensFacing == CameraSelector.LENS_FACING_BACK
         val output = File(activity.cacheDir, "video_norm0_${System.currentTimeMillis()}_${segment.file.name}")
         RoundVideoOrientationFixer.normalizeSegmentToRotation0(segment.file, output, mirrorX)
