@@ -746,24 +746,12 @@ internal class ChatRecordingController(
                     if (segments.size == 1) {
                         val segment = segments.first()
                         val metadataRotation = readSegmentRotation(segment.file)
-                        if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) {
-                            val normalized = normalizeRoundVideoForSend(segment, index = 0)
-                            Log.i(
-                                "VideoUpload",
-                                "final send scenario=single_back inputRotation=$metadataRotation outputRotation=${readSegmentRotation(normalized.file)} durationUs=${readVideoDurationUs(normalized.file)}"
-                            )
-                            normalized.file.takeIf { it.exists() && it.length() > 0L }
-                        } else {
-                            Log.i(
-                                "VideoUpload",
-                                "normalize skipped reason=single_front lensFacing=${segment.lensFacing} file=${segment.file.absolutePath} size=${segment.file.length()} metadataRotation=$metadataRotation outputRotation=$metadataRotation"
-                            )
-                            Log.i(
-                                "VideoUpload",
-                                "final send scenario=single_front outputRotation=$metadataRotation durationUs=${readVideoDurationUs(segment.file)}"
-                            )
-                            segment.file.takeIf { it.exists() && it.length() > 0L }
-                        }
+                        val normalized = normalizeRoundVideoForSend(segment, index = 0)
+                        Log.i(
+                            "VideoUpload",
+                            "final send scenario=single_segment lensFacing=${segment.lensFacing} inputRotation=$metadataRotation outputRotation=${readSegmentRotation(normalized.file)} durationUs=${readVideoDurationUs(normalized.file)}"
+                        )
+                        normalized.file.takeIf { it.exists() && it.length() > 0L }
                     } else {
                         val normalizeStart = System.currentTimeMillis()
                         val normalized = segments.mapIndexed { index, segment ->
@@ -815,8 +803,10 @@ internal class ChatRecordingController(
     ): VideoSegment {
         logRoundVideoDiagnostic(segment, "normalizeRoundVideoForSend")
         val input = readVideoDiagnostics(segment.file)
+        // Back camera mirror is empirically correct with mirrorX=true on Samsung S22 Ultra. Do not flip back globally; front uses mirrorX=false.
+        val mirrorX = segment.lensFacing == CameraSelector.LENS_FACING_BACK
         val output = File(activity.cacheDir, "video_norm0_${System.currentTimeMillis()}_${segment.file.name}")
-        RoundVideoOrientationFixer.normalizeSegmentToRotation0(segment.file, output)
+        RoundVideoOrientationFixer.normalizeSegmentToRotation0(segment.file, output, mirrorX)
         val fixed = readVideoDiagnostics(output)
         check(output.exists() && output.length() > 0L && fixed.frameWidth > 0 && fixed.frameHeight > 0) {
             "normalize rotation0 output not playable"
@@ -826,7 +816,7 @@ internal class ChatRecordingController(
         }
         Log.i(
             "VideoUpload",
-            "round video segment index=$index lensFacing=${segment.lensFacing} metadataRotation=${input.metadataRotation} trackRotation=${input.trackRotation} correctionMode=PIXEL_NORMALIZE_ROTATION0 outputMetadataRotation=${fixed.metadataRotation}"
+            "round video segment index=$index lensFacing=${segment.lensFacing} mirrorX=$mirrorX metadataRotation=${input.metadataRotation} trackRotation=${input.trackRotation} decoderRotationNeutralized=true correctionMode=PIXEL_NORMALIZE_ROTATION0 outputMetadataRotation=${fixed.metadataRotation}"
         )
         return segment.copy(file = output, durationUs = readVideoDurationUs(output))
     }

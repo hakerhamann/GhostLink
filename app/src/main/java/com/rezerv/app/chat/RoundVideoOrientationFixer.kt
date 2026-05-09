@@ -22,7 +22,7 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
 internal object RoundVideoOrientationFixer {
-    fun normalizeSegmentToRotation0(input: File, output: File) {
+    fun normalizeSegmentToRotation0(input: File, output: File, mirrorX: Boolean) {
         val tracks = findTracks(input)
         require(tracks.videoIndex >= 0) { "No video track" }
         val videoFormat = tracks.videoFormat ?: error("No video format")
@@ -69,7 +69,7 @@ internal object RoundVideoOrientationFixer {
             outputSurface = CodecInputSurface(inputSurface).apply { makeCurrent() }
             encoder.start()
 
-            decoderSurface = DecoderOutputSurface(outWidth, outHeight, totalRotation)
+            decoderSurface = DecoderOutputSurface(outWidth, outHeight, totalRotation, mirrorX)
             if (videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
                 videoFormat.setInteger(MediaFormat.KEY_ROTATION, 0)
             }
@@ -165,7 +165,7 @@ internal object RoundVideoOrientationFixer {
             if (tracks.audioIndex >= 0 && audioMuxTrack >= 0) copyAudio(input, tracks.audioIndex, muxer, audioMuxTrack)
             Log.i(
                 "VideoUpload",
-                "normalize segment decoderRotationNeutralized=true mirrorX=true inputRotation=$inputRotation totalRotationApplied=$totalRotation outputMetadataRotation=0 inputWidth=$width inputHeight=$height outWidth=$outWidth outHeight=$outHeight fixStrategy=metadata_rotation frameWidth=$outWidth frameHeight=$outHeight"
+                "normalize segment decoderRotationNeutralized=true mirrorX=$mirrorX inputRotation=$inputRotation totalRotationApplied=$totalRotation outputMetadataRotation=0 inputWidth=$width inputHeight=$height outWidth=$outWidth outHeight=$outHeight fixStrategy=metadata_rotation frameWidth=$outWidth frameHeight=$outHeight"
             )
         } finally {
             runCatching { extractor.release() }
@@ -264,13 +264,18 @@ internal object RoundVideoOrientationFixer {
         }
     }
 
-    private class DecoderOutputSurface(width: Int, height: Int, totalRotation: Int) : SurfaceTexture.OnFrameAvailableListener {
+    private class DecoderOutputSurface(
+        width: Int,
+        height: Int,
+        totalRotation: Int,
+        mirrorX: Boolean
+    ) : SurfaceTexture.OnFrameAvailableListener {
         private val frameSyncObject = Object()
         private var frameAvailable = false
         private val textureId = createTexture()
         private val surfaceTexture = SurfaceTexture(textureId)
         val surface = Surface(surfaceTexture)
-        private val drawer = TextureDrawer(width, height, textureId, totalRotation)
+        private val drawer = TextureDrawer(width, height, textureId, totalRotation, mirrorX)
 
         init {
             surfaceTexture.setOnFrameAvailableListener(this)
@@ -309,7 +314,8 @@ internal object RoundVideoOrientationFixer {
         private val width: Int,
         private val height: Int,
         private val textureId: Int,
-        totalRotation: Int
+        totalRotation: Int,
+        private val mirrorX: Boolean
     ) {
         private val vertexBuffer = floatBuffer(
             -1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f
@@ -327,7 +333,6 @@ internal object RoundVideoOrientationFixer {
         private val rotationLoc = GLES20.glGetUniformLocation(program, "uRotation")
         private val mirrorXLoc = GLES20.glGetUniformLocation(program, "uMirrorX")
         private val rotation = totalRotation / 90
-        private val mirrorX = true
 
         fun draw(stMatrix: FloatArray) {
             GLES20.glViewport(0, 0, width, height)
