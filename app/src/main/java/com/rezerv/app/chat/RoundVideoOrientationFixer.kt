@@ -22,14 +22,23 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
 internal object RoundVideoOrientationFixer {
-    fun normalizeSegmentToRotation0(input: File, output: File, mirrorX: Boolean) {
+    fun normalizeSegmentToRotation0(
+        input: File,
+        output: File,
+        mirrorX: Boolean,
+        invertRotationDirection: Boolean = false
+    ) {
         val tracks = findTracks(input)
         require(tracks.videoIndex >= 0) { "No video track" }
         val videoFormat = tracks.videoFormat ?: error("No video format")
         val width = videoFormat.getInteger(MediaFormat.KEY_WIDTH)
         val height = videoFormat.getInteger(MediaFormat.KEY_HEIGHT)
         val inputRotation = normalizeRotation(readRotation(input))
-        val totalRotation = inputRotation
+        val totalRotation = if (invertRotationDirection) {
+            invertRightAngleRotation(inputRotation)
+        } else {
+            inputRotation
+        }
         val (outWidth, outHeight) = if (totalRotation == 90 || totalRotation == 270) {
             height to width
         } else {
@@ -165,7 +174,7 @@ internal object RoundVideoOrientationFixer {
             if (tracks.audioIndex >= 0 && audioMuxTrack >= 0) copyAudio(input, tracks.audioIndex, muxer, audioMuxTrack)
             Log.i(
                 "VideoUpload",
-                "normalize segment decoderRotationNeutralized=true mirrorX=$mirrorX inputRotation=$inputRotation totalRotationApplied=$totalRotation outputMetadataRotation=0 inputWidth=$width inputHeight=$height outWidth=$outWidth outHeight=$outHeight fixStrategy=metadata_rotation frameWidth=$outWidth frameHeight=$outHeight"
+                "normalize segment decoderRotationNeutralized=true mirrorX=$mirrorX inputRotation=$inputRotation totalRotationApplied=$totalRotation invertRotationDirection=$invertRotationDirection outputMetadataRotation=0 inputWidth=$width inputHeight=$height outWidth=$outWidth outHeight=$outHeight fixStrategy=metadata_rotation frameWidth=$outWidth frameHeight=$outHeight"
             )
         } finally {
             runCatching { extractor.release() }
@@ -178,6 +187,15 @@ internal object RoundVideoOrientationFixer {
             runCatching { inputSurface?.release() }
             runCatching { muxer?.stop() }
             runCatching { muxer?.release() }
+        }
+    }
+
+    private fun invertRightAngleRotation(rotation: Int): Int {
+        return when (normalizeRotation(rotation)) {
+            90 -> 270
+            270 -> 90
+            180 -> 180
+            else -> 0
         }
     }
 

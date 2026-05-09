@@ -821,8 +821,15 @@ internal class ChatRecordingController(
         val input = readVideoDiagnostics(segment.file)
         // Encoded output mirroring is controlled by CameraX VideoCapture MirrorMode.OFF. Do not mirror in shader.
         val mirrorX = false
+        // Samsung S22 Ultra BACK CameraX segments report rotation with opposite sign for pixel normalization. Do not replace with BACK -> 180.
+        val invertRotationDirection = segment.lensFacing == CameraSelector.LENS_FACING_BACK
         val rotation0 = File(activity.cacheDir, "video_norm0_${System.currentTimeMillis()}_${segment.file.name}")
-        RoundVideoOrientationFixer.normalizeSegmentToRotation0(segment.file, rotation0, mirrorX)
+        RoundVideoOrientationFixer.normalizeSegmentToRotation0(
+            input = segment.file,
+            output = rotation0,
+            mirrorX = mirrorX,
+            invertRotationDirection = invertRotationDirection
+        )
         copyRoundVideoDebugFile("03_after_rotation0_index_$index", rotation0, segment)
         val rotation0Diagnostics = readVideoDiagnostics(rotation0)
         check(rotation0.exists() && rotation0.length() > 0L && rotation0Diagnostics.frameWidth > 0 && rotation0Diagnostics.frameHeight > 0) {
