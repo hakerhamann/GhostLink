@@ -75,6 +75,7 @@ internal object RoundVideoOrientationFixer {
                 start()
             }
             muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            muxer.setOrientationHint(0)
             var muxerStarted = false
             var videoMuxTrack = -1
             val audioMuxTrack = tracks.audioFormat?.let { muxer.addTrack(it) } ?: -1
@@ -160,7 +161,7 @@ internal object RoundVideoOrientationFixer {
             if (tracks.audioIndex >= 0 && audioMuxTrack >= 0) copyAudio(input, tracks.audioIndex, muxer, audioMuxTrack)
             Log.i(
                 "VideoUpload",
-                "normalize segment inputWidth=$width inputHeight=$height inputRotation=$inputRotation totalRotation=$totalRotation outWidth=$outWidth outHeight=$outHeight outputRotation=0 fixStrategy=metadata_rotation frameWidth=$outWidth frameHeight=$outHeight"
+                "normalize segment inputWidth=$width inputHeight=$height inputRotation=$inputRotation totalRotationApplied=$totalRotation outWidth=$outWidth outHeight=$outHeight outputMetadataRotation=0 fixStrategy=metadata_rotation frameWidth=$outWidth frameHeight=$outHeight"
             )
         } finally {
             runCatching { extractor.release() }
@@ -310,7 +311,7 @@ internal object RoundVideoOrientationFixer {
             -1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f
         )
         private val texBuffer = floatBuffer(
-            1f, 1f, 0f, 1f, 1f, 0f, 0f, 0f
+            0f, 1f, 1f, 1f, 0f, 0f, 1f, 0f
         )
         private val program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
         private val positionLoc = GLES20.glGetAttribLocation(program, "aPosition")

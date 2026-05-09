@@ -828,6 +828,7 @@ internal class ChatRecordingController(
         logRoundVideoDiagnostic(segment, "normalizeRoundVideoForSend")
         if (forcePixelNormalize) {
             val input = readVideoDiagnostics(segment.file)
+            val totalRotationApplied = normalizeRotation(input.trackRotation ?: input.metadataRotation)
             val output = File(activity.cacheDir, "video_norm0_${System.currentTimeMillis()}_${segment.file.name}")
             RoundVideoOrientationFixer.normalizeSegmentToRotation0(segment.file, output)
             val fixed = readVideoDiagnostics(output)
@@ -839,7 +840,7 @@ internal class ChatRecordingController(
             }
             Log.i(
                 "VideoUpload",
-                "round video segment index=$index lensFacing=${segment.lensFacing} metadataRotation=${input.metadataRotation} correctionMode=PIXEL_NORMALIZE_ROTATION0 outputRotation=${fixed.metadataRotation}"
+                "round video segment index=$index lensFacing=${segment.lensFacing} metadataRotation=${input.metadataRotation} totalRotationApplied=$totalRotationApplied correctionMode=PIXEL_NORMALIZE_ROTATION0 outputMetadataRotation=${fixed.metadataRotation}"
             )
             return segment.copy(file = output, durationUs = readVideoDurationUs(output))
         }
