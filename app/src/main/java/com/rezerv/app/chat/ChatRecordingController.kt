@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.res.ColorStateList
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.hardware.camera2.CameraCharacteristics
 import android.media.MediaCodec
@@ -40,6 +41,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import com.google.common.util.concurrent.ListenableFuture
+import com.rezerv.app.BuildConfig
 import com.rezerv.app.databinding.ActivityChatBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -657,6 +659,11 @@ internal class ChatRecordingController(
         val shouldSend = pendingVideoSendAfterStop
         val durationSec = ((System.currentTimeMillis() - recordingStartedAtMs) / 1000L).toInt().coerceAtLeast(0)
         val shouldSwitchCamera = pendingCameraSwitchAfterFinalize || switchInProgress
+        val finalizedLensFacing = videoRecordFacing
+        Log.i(
+            "VideoUpload",
+            "finalize snapshot finalizedLensFacing=$finalizedLensFacing currentBoundLensFacing=$currentBoundLensFacing videoRecordFacing=$videoRecordFacing shouldSwitchCamera=$shouldSwitchCamera"
+        )
 
         isVideoRecording = false
         if (!shouldSwitchCamera) {
@@ -671,13 +678,14 @@ internal class ChatRecordingController(
             if (validFile != null) {
                 videoSegments += VideoSegment(
                     file = validFile,
-                    lensFacing = videoRecordFacing,
+                    lensFacing = finalizedLensFacing,
                     startedAtMs = recordingStartedAtMs.takeIf { it > 0L },
                     durationUs = readVideoDurationUs(validFile)
                 )
+                copyRoundVideoDebugFile("01_raw_segment_index_${videoSegments.lastIndex}", validFile, videoSegments.last())
                 Log.i(
                     "VideoUpload",
-                    "round video segment index=${videoSegments.lastIndex} lensFacing=$videoRecordFacing durationUs=${videoSegments.last().durationUs ?: 0L} path=${validFile.absolutePath}"
+                    "round video segment index=${videoSegments.lastIndex} lensFacing=$finalizedLensFacing durationUs=${videoSegments.last().durationUs ?: 0L} path=${validFile.absolutePath}"
                 )
             } else {
                 runCatching { file?.delete() }
@@ -697,9 +705,9 @@ internal class ChatRecordingController(
 
         recordingStartedAtMs = 0L
         updateRecordingUi(recording = false, elapsedSec = 0)
-        resetVideoFacingForNextSession()
 
         if (event.hasError()) {
+            resetVideoFacingForNextSession()
             runCatching { file?.delete() }
             deleteVideoSegments()
             Toast.makeText(activity, "Ошибка видеозаписи", Toast.LENGTH_SHORT).show()
@@ -707,12 +715,14 @@ internal class ChatRecordingController(
         }
 
         if (!shouldSend) {
+            resetVideoFacingForNextSession()
             runCatching { file?.delete() }
             deleteVideoSegments()
             return
         }
 
         if (file == null || !file.exists() || file.length() <= 0L) {
+            resetVideoFacingForNextSession()
             runCatching { file?.delete() }
             deleteVideoSegments()
             Toast.makeText(activity, "Не удалось сохранить видеосообщение", Toast.LENGTH_SHORT).show()
@@ -721,14 +731,16 @@ internal class ChatRecordingController(
 
         videoSegments += VideoSegment(
             file = file,
-            lensFacing = videoRecordFacing,
+            lensFacing = finalizedLensFacing,
             startedAtMs = recordingStartedAtMs.takeIf { it > 0L },
             durationUs = readVideoDurationUs(file)
         )
+        copyRoundVideoDebugFile("01_raw_segment_index_${videoSegments.lastIndex}", file, videoSegments.last())
         Log.i(
             "VideoUpload",
-            "round video segment index=${videoSegments.lastIndex} lensFacing=$videoRecordFacing durationUs=${videoSegments.last().durationUs ?: 0L} path=${file.absolutePath}"
+            "round video segment index=${videoSegments.lastIndex} lensFacing=$finalizedLensFacing durationUs=${videoSegments.last().durationUs ?: 0L} path=${file.absolutePath}"
         )
+        resetVideoFacingForNextSession()
         finalizeVideoSegmentsForSend(durationSec.coerceAtMost(MAX_VIDEO_RECORD_DURATION_SEC))
     }
 
@@ -752,6 +764,7 @@ internal class ChatRecordingController(
                             "VideoUpload",
                             "final send scenario=single_segment lensFacing=${segment.lensFacing} inputRotation=$metadataRotation outputRotation=${readSegmentRotation(normalized.file)} durationUs=${readVideoDurationUs(normalized.file)}"
                         )
+                        copyRoundVideoDebugFile("04_final_single_send", normalized.file, segment)
                         normalized.file.takeIf { it.exists() && it.length() > 0L }
                     } else {
                         val normalizeStart = System.currentTimeMillis()
@@ -760,6 +773,7 @@ internal class ChatRecordingController(
                         }
                         val output = File(activity.cacheDir, "video_merged_${System.currentTimeMillis()}.mp4")
                         concatMp4Segments(normalized.map { it.file }, output, forceRotation0 = true)
+                        copyRoundVideoDebugFile("04_final_merged_send", output, null)
                         normalized.forEach { segment ->
                             if (segment.file !in segments.map { it.file }) runCatching { segment.file.delete() }
                         }
@@ -803,11 +817,13 @@ internal class ChatRecordingController(
         index: Int = -1
     ): VideoSegment {
         logRoundVideoDiagnostic(segment, "normalizeRoundVideoForSend")
+        copyRoundVideoDebugFile("02_before_normalize_index_$index", segment.file, segment)
         val input = readVideoDiagnostics(segment.file)
         // Encoded output mirroring is controlled by CameraX VideoCapture MirrorMode.OFF. Do not mirror in shader.
         val mirrorX = false
         val rotation0 = File(activity.cacheDir, "video_norm0_${System.currentTimeMillis()}_${segment.file.name}")
         RoundVideoOrientationFixer.normalizeSegmentToRotation0(segment.file, rotation0, mirrorX)
+        copyRoundVideoDebugFile("03_after_rotation0_index_$index", rotation0, segment)
         val rotation0Diagnostics = readVideoDiagnostics(rotation0)
         check(rotation0.exists() && rotation0.length() > 0L && rotation0Diagnostics.frameWidth > 0 && rotation0Diagnostics.frameHeight > 0) {
             "normalize rotation0 output not playable"
@@ -848,6 +864,57 @@ internal class ChatRecordingController(
             "round video segment index=$index lensFacing=${segment.lensFacing} mirrorX=$mirrorX sourceMirrorControlledBy=CameraX_MIRROR_MODE_OFF metadataRotation=${input.metadataRotation} trackRotation=${input.trackRotation} decoderRotationNeutralized=true correctionMode=PIXEL_NORMALIZE_ROTATION0 outputMetadataRotation=${fixed.metadataRotation}"
         )
         return segment.copy(file = finalFile, durationUs = readVideoDurationUs(finalFile))
+    }
+
+    private fun roundVideoDebugDir(): File {
+        return File(activity.getExternalFilesDir(null), "round_video_debug").apply { mkdirs() }
+    }
+
+    private fun copyRoundVideoDebugFile(label: String, source: File, segment: VideoSegment? = null): File? {
+        if (!BuildConfig.DEBUG) return null
+        if (!source.exists() || source.length() <= 0L) return null
+
+        val safeLabel = label.replace("[^A-Za-z0-9_.-]".toRegex(), "_")
+        val lens = when (segment?.lensFacing) {
+            CameraSelector.LENS_FACING_FRONT -> "front"
+            CameraSelector.LENS_FACING_BACK -> "back"
+            else -> "unknown"
+        }
+        val diag = readVideoDiagnostics(source)
+        val out = File(
+            roundVideoDebugDir(),
+            "${System.currentTimeMillis()}_${safeLabel}_${lens}_rot${diag.metadataRotation}_${diag.width}x${diag.height}_frame${diag.frameWidth}x${diag.frameHeight}.mp4"
+        )
+        source.copyTo(out, overwrite = true)
+        generateDebugFirstFrame(out)
+        Log.i(
+            "VideoUploadAudit",
+            "copy label=$label lens=$lens src=${source.absolutePath} dst=${out.absolutePath} size=${out.length()} metadataRotation=${diag.metadataRotation} trackRotation=${diag.trackRotation} width=${diag.width} height=${diag.height} frameWidth=${diag.frameWidth} frameHeight=${diag.frameHeight}"
+        )
+        return out
+    }
+
+    private fun generateDebugFirstFrame(video: File): File? {
+        if (!BuildConfig.DEBUG) return null
+        return runCatching {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(video.absolutePath)
+                val bitmap = retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    ?: return@runCatching null
+                val jpg = File(video.parentFile, video.nameWithoutExtension + "_frame0.jpg")
+                java.io.FileOutputStream(jpg).use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
+                }
+                bitmap.recycle()
+                Log.i("VideoUploadAudit", "frame video=${video.absolutePath} jpg=${jpg.absolutePath} size=${jpg.length()}")
+                jpg
+            } finally {
+                retriever.release()
+            }
+        }.onFailure {
+            Log.w("VideoUploadAudit", "frame failed video=${video.absolutePath}: ${it.message}")
+        }.getOrNull()
     }
 
     private fun inferRoundVideoScenario(segments: List<VideoSegment>): String {

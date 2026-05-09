@@ -37,6 +37,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.rezerv.app.AppContainer
+import com.rezerv.app.BuildConfig
 import com.rezerv.app.R
 import com.rezerv.app.auth.LoginActivity
 import com.rezerv.app.data.model.ChatMessage
@@ -1524,6 +1525,9 @@ class ChatActivity : AppCompatActivity() {
                     }.onFailure {
                         Log.w("VideoUpload", "thumbnail upload skipped: ${it.message}")
                     }.getOrNull()?.also { thumbnailUploaded = true }
+                }
+                if (BuildConfig.DEBUG) {
+                    Log.i("VideoUploadAudit", "05_upload_file path=${file.absolutePath} size=${file.length()}")
                 }
                 val videoUrl = AppContainer.chatRepository.uploadVideoFile(
                     chatId = chatId,
