@@ -181,6 +181,178 @@ internal object RoundVideoOrientationFixer {
         }
     }
 
+    fun mirrorRotation0SegmentX(input: File, output: File) {
+        transcodeSegment(
+            input = input,
+            output = output,
+            totalRotation = 0,
+            mirrorX = true,
+            outputRotation0 = true
+        )
+        Log.i(
+            "VideoUpload",
+            "mirror rotation0 segment decoderRotationNeutralized=true inputAlreadyRotation0=true outputMetadataRotation=0"
+        )
+    }
+
+    private fun transcodeSegment(
+        input: File,
+        output: File,
+        totalRotation: Int,
+        mirrorX: Boolean,
+        outputRotation0: Boolean
+    ) {
+        val tracks = findTracks(input)
+        require(tracks.videoIndex >= 0) { "No video track" }
+        val videoFormat = tracks.videoFormat ?: error("No video format")
+        val width = videoFormat.getInteger(MediaFormat.KEY_WIDTH)
+        val height = videoFormat.getInteger(MediaFormat.KEY_HEIGHT)
+        val (outWidth, outHeight) = if (totalRotation == 90 || totalRotation == 270) {
+            height to width
+        } else {
+            width to height
+        }
+        val durationUs = if (videoFormat.containsKey(MediaFormat.KEY_DURATION)) {
+            videoFormat.getLong(MediaFormat.KEY_DURATION)
+        } else {
+            0L
+        }
+        val bitrate = if (videoFormat.containsKey(MediaFormat.KEY_BIT_RATE)) {
+            videoFormat.getInteger(MediaFormat.KEY_BIT_RATE).coerceAtLeast(DEFAULT_BITRATE)
+        } else {
+            DEFAULT_BITRATE
+        }
+        val mime = videoFormat.getString(MediaFormat.KEY_MIME).orEmpty()
+        val extractor = MediaExtractor()
+        var decoder: MediaCodec? = null
+        var encoder: MediaCodec? = null
+        var inputSurface: Surface? = null
+        var outputSurface: CodecInputSurface? = null
+        var decoderSurface: DecoderOutputSurface? = null
+        var muxer: MediaMuxer? = null
+        try {
+            extractor.setDataSource(input.absolutePath)
+            extractor.selectTrack(tracks.videoIndex)
+            val encodeFormat = MediaFormat.createVideoFormat(MIME_AVC, outWidth, outHeight).apply {
+                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+                setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            }
+            encoder = MediaCodec.createEncoderByType(MIME_AVC).apply {
+                configure(encodeFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            }
+            inputSurface = encoder.createInputSurface()
+            outputSurface = CodecInputSurface(inputSurface).apply { makeCurrent() }
+            encoder.start()
+
+            decoderSurface = DecoderOutputSurface(outWidth, outHeight, totalRotation, mirrorX)
+            if (videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
+                videoFormat.setInteger(MediaFormat.KEY_ROTATION, 0)
+            }
+            decoder = MediaCodec.createDecoderByType(mime).apply {
+                configure(videoFormat, decoderSurface.surface, null, 0)
+                start()
+            }
+            muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            if (outputRotation0) muxer.setOrientationHint(0)
+            var muxerStarted = false
+            var videoMuxTrack = -1
+            val audioMuxTrack = tracks.audioFormat?.let { muxer.addTrack(it) } ?: -1
+            val decoderInfo = MediaCodec.BufferInfo()
+            val encoderInfo = MediaCodec.BufferInfo()
+            var sawInputEnd = false
+            var sawDecoderEnd = false
+            var sawEncoderEnd = false
+
+            while (!sawEncoderEnd) {
+                if (!sawInputEnd) {
+                    val inputIndex = decoder.dequeueInputBuffer(TIMEOUT_US)
+                    if (inputIndex >= 0) {
+                        val inputBuffer = decoder.getInputBuffer(inputIndex) ?: error("decoder input null")
+                        val sampleSize = extractor.readSampleData(inputBuffer, 0)
+                        if (sampleSize < 0) {
+                            decoder.queueInputBuffer(inputIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            sawInputEnd = true
+                        } else {
+                            decoder.queueInputBuffer(
+                                inputIndex,
+                                0,
+                                sampleSize,
+                                extractor.sampleTime.coerceAtLeast(0L),
+                                extractor.sampleFlags
+                            )
+                            extractor.advance()
+                        }
+                    }
+                }
+
+                var decoderOutputAvailable = true
+                while (decoderOutputAvailable && !sawDecoderEnd) {
+                    when (val outputIndex = decoder.dequeueOutputBuffer(decoderInfo, TIMEOUT_US)) {
+                        MediaCodec.INFO_TRY_AGAIN_LATER -> decoderOutputAvailable = false
+                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Unit
+                        else -> if (outputIndex >= 0) {
+                            val render = decoderInfo.size > 0
+                            decoder.releaseOutputBuffer(outputIndex, render)
+                            if (render) {
+                                val stMatrix = decoderSurface.awaitFrame()
+                                decoderSurface.draw(stMatrix)
+                                outputSurface.setPresentationTime(decoderInfo.presentationTimeUs * 1000L)
+                                outputSurface.swapBuffers()
+                            }
+                            if ((decoderInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                                encoder.signalEndOfInputStream()
+                                sawDecoderEnd = true
+                            }
+                        }
+                    }
+                }
+
+                var encoderOutputAvailable = true
+                while (encoderOutputAvailable && !sawEncoderEnd) {
+                    when (val outputIndex = encoder.dequeueOutputBuffer(encoderInfo, TIMEOUT_US)) {
+                        MediaCodec.INFO_TRY_AGAIN_LATER -> encoderOutputAvailable = false
+                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            check(!muxerStarted) { "encoder format changed twice" }
+                            val outFormat = encoder.outputFormat
+                            if (durationUs > 0L) outFormat.setLong(MediaFormat.KEY_DURATION, durationUs)
+                            videoMuxTrack = muxer.addTrack(outFormat)
+                            muxer.start()
+                            muxerStarted = true
+                        }
+                        else -> if (outputIndex >= 0) {
+                            val encoded = encoder.getOutputBuffer(outputIndex) ?: error("encoder output null")
+                            if ((encoderInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                                encoderInfo.size = 0
+                            }
+                            if (encoderInfo.size > 0 && muxerStarted) {
+                                encoded.position(encoderInfo.offset)
+                                encoded.limit(encoderInfo.offset + encoderInfo.size)
+                                muxer.writeSampleData(videoMuxTrack, encoded, encoderInfo)
+                            }
+                            sawEncoderEnd = (encoderInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
+                            encoder.releaseOutputBuffer(outputIndex, false)
+                        }
+                    }
+                }
+            }
+            check(muxerStarted) { "muxer not started" }
+            if (tracks.audioIndex >= 0 && audioMuxTrack >= 0) copyAudio(input, tracks.audioIndex, muxer, audioMuxTrack)
+        } finally {
+            runCatching { extractor.release() }
+            runCatching { decoder?.stop() }
+            runCatching { decoder?.release() }
+            runCatching { encoder?.stop() }
+            runCatching { encoder?.release() }
+            runCatching { decoderSurface?.release() }
+            runCatching { outputSurface?.release() }
+            runCatching { inputSurface?.release() }
+            runCatching { muxer?.stop() }
+            runCatching { muxer?.release() }
+        }
+    }
+
     private fun findTracks(file: File): Tracks {
         val extractor = MediaExtractor()
         try {
@@ -264,13 +436,18 @@ internal object RoundVideoOrientationFixer {
         }
     }
 
-    private class DecoderOutputSurface(width: Int, height: Int, totalRotation: Int) : SurfaceTexture.OnFrameAvailableListener {
+    private class DecoderOutputSurface(
+        width: Int,
+        height: Int,
+        totalRotation: Int,
+        mirrorX: Boolean = false
+    ) : SurfaceTexture.OnFrameAvailableListener {
         private val frameSyncObject = Object()
         private var frameAvailable = false
         private val textureId = createTexture()
         private val surfaceTexture = SurfaceTexture(textureId)
         val surface = Surface(surfaceTexture)
-        private val drawer = TextureDrawer(width, height, textureId, totalRotation)
+        private val drawer = TextureDrawer(width, height, textureId, totalRotation, mirrorX)
 
         init {
             surfaceTexture.setOnFrameAvailableListener(this)
@@ -309,7 +486,8 @@ internal object RoundVideoOrientationFixer {
         private val width: Int,
         private val height: Int,
         private val textureId: Int,
-        totalRotation: Int
+        totalRotation: Int,
+        mirrorX: Boolean
     ) {
         private val vertexBuffer = floatBuffer(
             -1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f
@@ -320,7 +498,7 @@ internal object RoundVideoOrientationFixer {
             0f, 0f,
             1f, 0f
         )
-        private val program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
+        private val program = createProgram(if (mirrorX) MIRROR_VERTEX_SHADER else VERTEX_SHADER, FRAGMENT_SHADER)
         private val positionLoc = GLES20.glGetAttribLocation(program, "aPosition")
         private val texCoordLoc = GLES20.glGetAttribLocation(program, "aTexCoord")
         private val stMatrixLoc = GLES20.glGetUniformLocation(program, "uSTMatrix")
@@ -332,7 +510,7 @@ internal object RoundVideoOrientationFixer {
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
             GLES20.glUseProgram(program)
             GLES20.glUniformMatrix4fv(stMatrixLoc, 1, false, stMatrix, 0)
-            GLES20.glUniform1i(rotationLoc, rotation)
+            if (rotationLoc >= 0) GLES20.glUniform1i(rotationLoc, rotation)
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
             GLES20.glEnableVertexAttribArray(positionLoc)
@@ -458,6 +636,18 @@ internal object RoundVideoOrientationFixer {
                 rotatedTexCoord = p;
             }
             vTexCoord = (uSTMatrix * vec4(rotatedTexCoord, 0.0, 1.0)).xy;
+        }
+    """
+    private const val MIRROR_VERTEX_SHADER = """
+        attribute vec4 aPosition;
+        attribute vec2 aTexCoord;
+        uniform mat4 uSTMatrix;
+        varying vec2 vTexCoord;
+        void main() {
+            vec4 pos = aPosition;
+            pos.x = -pos.x;
+            gl_Position = pos;
+            vTexCoord = (uSTMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
         }
     """
     private const val FRAGMENT_SHADER = """

@@ -806,20 +806,48 @@ internal class ChatRecordingController(
         val input = readVideoDiagnostics(segment.file)
         // Encoded output mirroring is controlled by CameraX VideoCapture MirrorMode.OFF. Do not mirror in shader.
         val mirrorX = false
-        val output = File(activity.cacheDir, "video_norm0_${System.currentTimeMillis()}_${segment.file.name}")
-        RoundVideoOrientationFixer.normalizeSegmentToRotation0(segment.file, output, mirrorX)
-        val fixed = readVideoDiagnostics(output)
-        check(output.exists() && output.length() > 0L && fixed.frameWidth > 0 && fixed.frameHeight > 0) {
+        val rotation0 = File(activity.cacheDir, "video_norm0_${System.currentTimeMillis()}_${segment.file.name}")
+        RoundVideoOrientationFixer.normalizeSegmentToRotation0(segment.file, rotation0, mirrorX)
+        val rotation0Diagnostics = readVideoDiagnostics(rotation0)
+        check(rotation0.exists() && rotation0.length() > 0L && rotation0Diagnostics.frameWidth > 0 && rotation0Diagnostics.frameHeight > 0) {
             "normalize rotation0 output not playable"
         }
-        check(fixed.metadataRotation == 0) {
-            "normalize rotation0 output metadataRotation=${fixed.metadataRotation}"
+        check(rotation0Diagnostics.metadataRotation == 0) {
+            "normalize rotation0 output metadataRotation=${rotation0Diagnostics.metadataRotation}"
         }
+        Log.i(
+            "VideoUpload",
+            "round video rotation0 pass lensFacing=${segment.lensFacing} outputMetadataRotation=${rotation0Diagnostics.metadataRotation}"
+        )
+        val finalFile = if (segment.lensFacing == CameraSelector.LENS_FACING_BACK) {
+            val mirrored = File(activity.cacheDir, "video_norm0_mirrorx_${System.currentTimeMillis()}_${segment.file.name}")
+            RoundVideoOrientationFixer.mirrorRotation0SegmentX(rotation0, mirrored)
+            runCatching { rotation0.delete() }
+            val mirroredDiagnostics = readVideoDiagnostics(mirrored)
+            check(mirrored.exists() && mirrored.length() > 0L && mirroredDiagnostics.frameWidth > 0 && mirroredDiagnostics.frameHeight > 0) {
+                "mirror rotation0 output not playable"
+            }
+            check(mirroredDiagnostics.metadataRotation == 0) {
+                "mirror rotation0 output metadataRotation=${mirroredDiagnostics.metadataRotation}"
+            }
+            Log.i(
+                "VideoUpload",
+                "round video mirrorX pass applied=true lensFacing=BACK inputAlreadyRotation0=true outputMetadataRotation=${mirroredDiagnostics.metadataRotation}"
+            )
+            mirrored
+        } else {
+            Log.i(
+                "VideoUpload",
+                "round video mirrorX pass applied=false lensFacing=FRONT"
+            )
+            rotation0
+        }
+        val fixed = readVideoDiagnostics(finalFile)
         Log.i(
             "VideoUpload",
             "round video segment index=$index lensFacing=${segment.lensFacing} mirrorX=$mirrorX sourceMirrorControlledBy=CameraX_MIRROR_MODE_OFF metadataRotation=${input.metadataRotation} trackRotation=${input.trackRotation} decoderRotationNeutralized=true correctionMode=PIXEL_NORMALIZE_ROTATION0 outputMetadataRotation=${fixed.metadataRotation}"
         )
-        return segment.copy(file = output, durationUs = readVideoDurationUs(output))
+        return segment.copy(file = finalFile, durationUs = readVideoDurationUs(finalFile))
     }
 
     private fun inferRoundVideoScenario(segments: List<VideoSegment>): String {
@@ -1191,6 +1219,7 @@ internal class ChatRecordingController(
     }
 
     private fun createRoundVideoCapture(recorder: Recorder, lensFacing: Int): VideoCapture<Recorder> {
+        // Do not use MirrorMode.ON for BACK: on Samsung S22 Ultra it changes handedness before rotation normalization and makes BACK upside-down.
         return VideoCapture.Builder(recorder)
             .setMirrorMode(MirrorMode.MIRROR_MODE_OFF)
             .build()
