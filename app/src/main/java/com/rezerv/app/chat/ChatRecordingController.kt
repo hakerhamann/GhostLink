@@ -23,6 +23,7 @@ import android.view.ViewConfiguration
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.MirrorMode
 import androidx.camera.core.Preview
 import androidx.camera.core.Camera
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -370,7 +371,7 @@ internal class ChatRecordingController(
                 .setQualitySelector(QualitySelector.from(Quality.LOWEST))
                 .setTargetVideoEncodingBitRate(800_000)
                 .build()
-            val capture = VideoCapture.withOutput(recorder)
+            val capture = createRoundVideoCapture(recorder, nextFacing)
             applyVideoTargetRotation(preview, capture)
             provider.unbindAll()
             boundCamera = provider.bindToLifecycle(activity, selector, preview, capture)
@@ -535,7 +536,7 @@ internal class ChatRecordingController(
                         .setQualitySelector(QualitySelector.from(Quality.LOWEST))
                         .setTargetVideoEncodingBitRate(800_000)
                         .build()
-                    val capture = VideoCapture.withOutput(recorder)
+                    val capture = createRoundVideoCapture(recorder, CameraSelector.LENS_FACING_FRONT)
                     applyVideoTargetRotation(preview, capture)
                     provider.unbindAll()
                     val selector = CameraSelector.Builder()
@@ -803,8 +804,8 @@ internal class ChatRecordingController(
     ): VideoSegment {
         logRoundVideoDiagnostic(segment, "normalizeRoundVideoForSend")
         val input = readVideoDiagnostics(segment.file)
-        // BACK camera requires final-sampling horizontal mirror after SurfaceTexture transform. FRONT remains mirrorX=false.
-        val mirrorX = segment.lensFacing == CameraSelector.LENS_FACING_BACK
+        // Encoded output mirroring is controlled by CameraX VideoCapture MirrorMode.OFF. Do not mirror in shader.
+        val mirrorX = false
         val output = File(activity.cacheDir, "video_norm0_${System.currentTimeMillis()}_${segment.file.name}")
         RoundVideoOrientationFixer.normalizeSegmentToRotation0(segment.file, output, mirrorX)
         val fixed = readVideoDiagnostics(output)
@@ -816,7 +817,7 @@ internal class ChatRecordingController(
         }
         Log.i(
             "VideoUpload",
-            "round video segment index=$index lensFacing=${segment.lensFacing} mirrorX=$mirrorX metadataRotation=${input.metadataRotation} trackRotation=${input.trackRotation} decoderRotationNeutralized=true correctionMode=PIXEL_NORMALIZE_ROTATION0 outputMetadataRotation=${fixed.metadataRotation}"
+            "round video segment index=$index lensFacing=${segment.lensFacing} mirrorX=$mirrorX sourceMirrorControlledBy=CameraX_MIRROR_MODE_OFF metadataRotation=${input.metadataRotation} trackRotation=${input.trackRotation} decoderRotationNeutralized=true correctionMode=PIXEL_NORMALIZE_ROTATION0 outputMetadataRotation=${fixed.metadataRotation}"
         )
         return segment.copy(file = output, durationUs = readVideoDurationUs(output))
     }
@@ -1139,7 +1140,7 @@ internal class ChatRecordingController(
                         .setQualitySelector(QualitySelector.from(Quality.LOWEST))
                         .setTargetVideoEncodingBitRate(800_000)
                         .build()
-                    val capture = VideoCapture.withOutput(recorder)
+                    val capture = createRoundVideoCapture(recorder, videoCameraFacing)
                     applyVideoTargetRotation(preview, capture)
                     bindVideoUseCases(provider, preview, capture)
                     cameraProvider = provider
@@ -1187,6 +1188,15 @@ internal class ChatRecordingController(
         applyVideoTargetRotation(preview, capture)
         logRoundVideoOrientation("camera bound fallback", currentBoundLensFacing, null, false)
         applyVideoFlash()
+    }
+
+    private fun createRoundVideoCapture(recorder: Recorder, lensFacing: Int): VideoCapture<Recorder> {
+        return VideoCapture.Builder(recorder)
+            .setMirrorMode(MirrorMode.MIRROR_MODE_OFF)
+            .build()
+            .also {
+                Log.i("VideoUpload", "round video capture mirrorMode=OFF lensFacing=$lensFacing")
+            }
     }
 
     private fun applyVideoFlash() {

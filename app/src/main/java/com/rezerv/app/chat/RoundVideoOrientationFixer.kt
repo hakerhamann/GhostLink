@@ -69,7 +69,7 @@ internal object RoundVideoOrientationFixer {
             outputSurface = CodecInputSurface(inputSurface).apply { makeCurrent() }
             encoder.start()
 
-            decoderSurface = DecoderOutputSurface(outWidth, outHeight, totalRotation, mirrorX)
+            decoderSurface = DecoderOutputSurface(outWidth, outHeight, totalRotation)
             if (videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
                 videoFormat.setInteger(MediaFormat.KEY_ROTATION, 0)
             }
@@ -264,18 +264,13 @@ internal object RoundVideoOrientationFixer {
         }
     }
 
-    private class DecoderOutputSurface(
-        width: Int,
-        height: Int,
-        totalRotation: Int,
-        mirrorX: Boolean
-    ) : SurfaceTexture.OnFrameAvailableListener {
+    private class DecoderOutputSurface(width: Int, height: Int, totalRotation: Int) : SurfaceTexture.OnFrameAvailableListener {
         private val frameSyncObject = Object()
         private var frameAvailable = false
         private val textureId = createTexture()
         private val surfaceTexture = SurfaceTexture(textureId)
         val surface = Surface(surfaceTexture)
-        private val drawer = TextureDrawer(width, height, textureId, totalRotation, mirrorX)
+        private val drawer = TextureDrawer(width, height, textureId, totalRotation)
 
         init {
             surfaceTexture.setOnFrameAvailableListener(this)
@@ -314,8 +309,7 @@ internal object RoundVideoOrientationFixer {
         private val width: Int,
         private val height: Int,
         private val textureId: Int,
-        totalRotation: Int,
-        private val mirrorX: Boolean
+        totalRotation: Int
     ) {
         private val vertexBuffer = floatBuffer(
             -1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f
@@ -331,7 +325,6 @@ internal object RoundVideoOrientationFixer {
         private val texCoordLoc = GLES20.glGetAttribLocation(program, "aTexCoord")
         private val stMatrixLoc = GLES20.glGetUniformLocation(program, "uSTMatrix")
         private val rotationLoc = GLES20.glGetUniformLocation(program, "uRotation")
-        private val mirrorXLoc = GLES20.glGetUniformLocation(program, "uMirrorX")
         private val rotation = totalRotation / 90
 
         fun draw(stMatrix: FloatArray) {
@@ -340,7 +333,6 @@ internal object RoundVideoOrientationFixer {
             GLES20.glUseProgram(program)
             GLES20.glUniformMatrix4fv(stMatrixLoc, 1, false, stMatrix, 0)
             GLES20.glUniform1i(rotationLoc, rotation)
-            GLES20.glUniform1i(mirrorXLoc, if (mirrorX) 1 else 0)
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
             GLES20.glEnableVertexAttribArray(positionLoc)
@@ -450,14 +442,9 @@ internal object RoundVideoOrientationFixer {
         attribute vec2 aTexCoord;
         uniform mat4 uSTMatrix;
         uniform int uRotation;
-        uniform int uMirrorX;
         varying vec2 vTexCoord;
         void main() {
-            vec4 pos = aPosition;
-            if (uMirrorX == 1) {
-                pos.x = -pos.x;
-            }
-            gl_Position = pos;
+            gl_Position = aPosition;
             vec2 p = aTexCoord;
             vec2 rotatedTexCoord;
             // Do not remove: Samsung S22 Ultra fix. Decoder rotation is neutralized; shader applies metadata rotation exactly once.
