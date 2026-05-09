@@ -7,6 +7,7 @@ import android.os.Looper
 import android.util.LruCache
 import android.widget.ImageView
 import androidx.core.view.isVisible
+import java.io.File
 import java.util.concurrent.Executors
 
 internal object RoundVideoThumbnailLoader {
@@ -27,8 +28,9 @@ internal object RoundVideoThumbnailLoader {
             return
         }
 
-        imageView.tag = source
-        cache.get(source)?.let { cached ->
+        val key = cacheKey(source)
+        imageView.tag = key
+        cache.get(key)?.let { cached ->
             imageView.setImageBitmap(cached)
             imageView.isVisible = true
             return
@@ -38,9 +40,9 @@ internal object RoundVideoThumbnailLoader {
         imageView.isVisible = false
         executor.execute {
             val bitmap = loadFrame(source) ?: return@execute
-            cache.put(source, bitmap)
+            cache.put(key, bitmap)
             mainHandler.post {
-                if (imageView.tag == source) {
+                if (imageView.tag == key) {
                     imageView.setImageBitmap(bitmap)
                     imageView.isVisible = true
                 }
@@ -52,6 +54,15 @@ internal object RoundVideoThumbnailLoader {
         imageView.tag = null
         imageView.setImageDrawable(null)
         imageView.isVisible = false
+    }
+
+    private fun cacheKey(source: String): String {
+        val file = File(source)
+        return if (file.exists()) {
+            "$source#${file.length()}#${file.lastModified()}"
+        } else {
+            source
+        }
     }
 
     private fun loadFrame(videoUrl: String): Bitmap? {

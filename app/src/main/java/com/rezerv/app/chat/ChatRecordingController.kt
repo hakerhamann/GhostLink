@@ -803,10 +803,10 @@ internal class ChatRecordingController(
     ): VideoSegment {
         logRoundVideoDiagnostic(segment, "normalizeRoundVideoForSend")
         val input = readVideoDiagnostics(segment.file)
-        // Back camera mirror is empirically correct with mirrorX=true on Samsung S22 Ultra. Do not flip back globally; front uses mirrorX=false.
-        val mirrorX = segment.lensFacing == CameraSelector.LENS_FACING_BACK
+        // Do not mirror encoded round-video pixels by lens. Front and back output files must be real-world left/right; CameraX/decoder rotation is handled separately.
+        val mirrorX = false
         val output = File(activity.cacheDir, "video_norm0_${System.currentTimeMillis()}_${segment.file.name}")
-        RoundVideoOrientationFixer.normalizeSegmentToRotation0(segment.file, output, mirrorX)
+        RoundVideoOrientationFixer.normalizeSegmentToRotation0(segment.file, output, mirrorX = false)
         val fixed = readVideoDiagnostics(output)
         check(output.exists() && output.length() > 0L && fixed.frameWidth > 0 && fixed.frameHeight > 0) {
             "normalize rotation0 output not playable"
